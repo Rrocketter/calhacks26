@@ -268,3 +268,22 @@ test('permission handler: apply_patch body outside cancels; handler errors cance
   assert.equal(events.length, 1);
   assert.equal(h({} as unknown as Params), ToolConfirmationOutcome.Cancel);
 });
+
+// The live CLI's TodoWrite schema is `todos: string` (checklist lines), not an array (Task 9 smoke).
+test('TodoWrite with a string todos list maps each line to a plan step', async () => {
+  const cases: [unknown, string[]][] = [
+    ['1. [completed] Read calendar.json\n2. [in_progress] Find the Priya event\n\n- [ ] Move it', ['Read calendar.json', 'Find the Priya event', 'Move it']],
+    ['[x] done\n* plain bullet\nno marker', ['done', 'plain bullet', 'no marker']],
+    [['[pending] a', 'b'], ['a', 'b']],
+    ['[{"content":"x","status":"pending"}]', ['x']],
+    ['', []],
+    [42, []],
+  ];
+  for (const [todos, steps] of cases) {
+    const s = fake([call('1', 'TodoWrite', { todos }), result('success')]);
+    const { events, emit } = collect();
+    await runTurn(s, 'go', { turnId: 't1', guard, emit });
+    assert.deepEqual(droid(events)[0]!.payload, { steps }, JSON.stringify(todos));
+    assertValid(events);
+  }
+});

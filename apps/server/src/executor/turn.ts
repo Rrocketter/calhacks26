@@ -88,6 +88,30 @@ export function makePermissionHandler(guard: Guard, turnIdRef: () => string, emi
   };
 }
 
+// The live CLI types TodoWrite `todos` as a string of checklist lines ("1. [completed] Read x");
+// arrays of strings or {content} objects are accepted too. Same line grammar as the SDK's parseTodos.
+const TODO_LINE = /^(?:\d+[.)]\s*|[-*]\s+)?(?:\[(?:completed|in_progress|pending|[xX]|\s*)\]\s*)?(.*)$/;
+export function todoSteps(todos: unknown): string[] {
+  if (Array.isArray(todos)) {
+    if (todos.every((t) => typeof t === 'string')) return todoSteps(todos.join('\n'));
+    return todos.map((t) => String((t as { content?: unknown } | null)?.content ?? ''));
+  }
+  if (typeof todos !== 'string') return [];
+  if (todos.trim().startsWith('[')) {
+    try {
+      const parsed: unknown = JSON.parse(todos);
+      if (Array.isArray(parsed)) return todoSteps(parsed);
+    } catch {
+      // not JSON: fall through to checklist lines
+    }
+  }
+  return todos
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((l) => (TODO_LINE.exec(l)?.[1] ?? l).trim());
+}
+
 function outcomeFor(subtype: string): TurnOutcome {
   return subtype === 'success' ? 'success' : subtype === 'interrupted' ? 'interrupted' : 'error';
 }
@@ -165,8 +189,7 @@ export async function runTurn(
             }
           }
         } else if (ev.name === 'TodoWrite') {
-          const todos = Array.isArray(input.todos) ? (input.todos as { content?: unknown }[]) : [];
-          send('plan', { steps: todos.map((t) => String(t?.content ?? '')) });
+          send('plan', { steps: todoSteps(input.todos) });
         } else {
           send('tool', { tool: ev.name, ...(p ? { path: p } : {}) });
         }
