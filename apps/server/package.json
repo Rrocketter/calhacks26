@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@ahead/contracts": "workspace:*",
+    "@factory/droid-sdk": "0.10.0",
     "@moss-js/moss": "1.21.0",
     "ws": "8.22.0"
   },

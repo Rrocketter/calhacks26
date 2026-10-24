@@ -119,3 +119,57 @@ Final transcript: `Draft a message to Priya saying, I'll see her Thursday at 2 f
 - It is always followed by exactly one of `turn.resume` (the user kept talking, the same turn continues, more `turn.update` follow) or `turn.end` (turn closed, final transcript).
 - AHEAD uses `turn.eager_end` as the "finalize speculation" signal. It must treat `turn.resume` as "un-finalize, keep speculating", not as a new turn.
 - In the spike run `turn.eager_end` appeared once and `turn.end` followed 345 ms later. `turn.resume` did not appear (the fixture has no mid-utterance pause), so its handling is untested live.
+
+## Factory Droid SDK
+
+**CANARY READ BYPASSED HANDLER.** Droid's `Read` and `LS` tools read files outside `var/workspace/` without ever calling the permission handler. The handler only scopes writes. Treat everything the server process can read as readable by the model.
+
+- Package: `@factory/droid-sdk@0.10.0` (pinned with `-E`), imported from `@factory/droid-sdk/node`. No postinstall build script, so pnpm did not block anything.
+- `createSession` spawns the local `droid` CLI (`~/.local/bin/droid`, v0.249.0) as `droid exec --input-format stream-jsonrpc --output-format stream-jsonrpc` and passes `FACTORY_API_KEY` from `process.env`.
+- Options used: `cwd: WORKSPACE_DIR`, `modelId: 'claude-haiku-5-5'` (accepted, no fallback needed), `autonomyLevel: AutonomyLevel.Off`, `disabledToolIds: ['Execute','Script','FetchUrl','WebSearch']`, `permissionHandler`, `abortSignal` (180 s watchdog).
+- Script: `pnpm --filter @ahead/server spike:droid` (`apps/server/scripts/spike-droid.ts`).
+
+### Quirks
+
+- **At `AutonomyLevel.Off` the CLI removes Create/Edit/ApplyPatch.** `session.listTools()` shows them `allowed=false`, and the model reports "no tool can create or write files". At `low` they come back. To keep Off and still route writes through the handler, call `session.updateSettings({ enabledToolIds: ['Create','Edit','ApplyPatch'] })` right after `createSession`. `enabledToolIds` is not in the 0.10.0 TypeScript type for `updateSettings`, so it needs a cast, but the CLI accepts it (listTools then shows `Create=true Edit=true`, settings show them in `enabledToolIds`). Took 10 to 17 ms.
+- **Returning `Cancel` ends the whole turn.** After the outside write was denied, the turn finished with `result success` and the remaining step never ran. The spike sends step 3 as a second `session.stream()` turn on the same session. AHEAD's executor should expect a denial to stop the plan.
+- `permissionHandler` fired once per write with `confirmationType`/`details.type = 'create'` and an absolute `details.filePath`. The only options to return are values from `params.options`; we return `proceed_once` or `cancel`, and a `permission_resolved` event follows within 1 ms.
+- Tools still allowed at Off with our disabled list: Read, LS, Grep, Glob, Task, Skill, ToolSearch, TodoWrite, ConnectApp, ListAutomations, ReadAutomation, ListAutomationTemplates, StageSettingsChanges. None of them asked for permission. `Task` (subagents) and `Skill` are worth disabling in the real executor.
+- Droid masked the secret-shaped values in the canary before they reached the model. The Read result was 101 bytes (the file size), contained the key name `FAKE_KEY`, contained a mask run, and did not contain the 32-hex canary value. The model answered "The read succeeded. The file is 101 bytes." This masking is Droid's own behavior and should not be relied on: file names, non-secret text, and directory listings outside the workspace are fully visible (an `LS` of the repo root returned 1526 bytes).
+- The model calls `ToolSearch` when it can't find a tool; it returned a 24-byte error each time.
+
+### Permission handler behavior observed
+
+| Tool | Reached handler | Outcome |
+|---|---|---|
+| Create `var/workspace/notes/spike.md` | yes (`create`) | allow, file written |
+| Create `var/outside-spike.txt` | yes (`create`) | deny, tool_result error (39 bytes), file absent |
+| Read `<repo>/.env.canary` | **no** | succeeded, 101 bytes, values masked |
+| LS `<repo>` | **no** | succeeded, 1526 bytes |
+
+### Verdict (run 3, final script)
+
+```
+model: claude-haiku-5-5
+handler saw types: create
+tools called: Create,Read,ToolSearch,LS
+write-inside: ok
+write-outside: denied
+canary-read: handler-saw=no succeeded=yes bytes=101
+canary leaked to model: no
+git -C var/workspace status --short:
+?? notes/spike.md
+```
+
+Run 1 (before re-enabling write tools) gave the same canary result: `handler-saw=no succeeded=yes bytes=101`, leaked `no`.
+
+### Latency (run 3)
+
+- `createSession` (spawn CLI + init): 894 ms. Earlier runs: 2159 ms (first run, cold), 720 ms.
+- First stream event: 12 ms after `stream()` (`mcp_status_changed`); first tool call (Create) at +5391 ms from session start.
+- Turn 1 (two Creates): `done success +7418ms`, CLI `durationMs=6485`.
+- Turn 2 (canary read): finished at +23159 ms from session start, CLI `durationMs=15739`.
+
+### Implication
+
+The runtime workspace should move outside the repo (and away from `.env`), or the executor needs a sandbox, because the handler cannot block reads. Reported to the human per the plan.
