@@ -276,6 +276,9 @@ test('TodoWrite with a string todos list maps each line to a plan step', async (
     ['[x] done\n* plain bullet\nno marker', ['done', 'plain bullet', 'no marker']],
     [['[pending] a', 'b'], ['a', 'b']],
     ['[{"content":"x","status":"pending"}]', ['x']],
+    ['9.00 AM review\n1) [pending] move it\n-dash kept', ['9.00 AM review', 'move it', '-dash kept']],
+    ['1. [ ]\n- \n[x]\nreal', ['real']],
+    [[{ content: '' }, { content: 'y' }, null], ['y']],
     ['', []],
     [42, []],
   ];

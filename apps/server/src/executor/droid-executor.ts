@@ -80,6 +80,8 @@ export class DroidExecutor implements Executor {
   // captures both when queued and resolves quietly if either moved (R15).
   private rollbackGen = 0;
   private resetGen = 0;
+  // Set by close(); terminal. No session opens and no phase runs afterwards.
+  private closed = false;
 
   constructor(private readonly opts: DroidExecutorOptions) {
     this.git = new WorkspaceGit(opts.workspace);
@@ -126,7 +128,7 @@ export class DroidExecutor implements Executor {
 
   // Never throws; on failure emits an error event and leaves the session null.
   private async ensureSession(): Promise<void> {
-    if (this.session) return;
+    if (this.closed || this.session) return;
     if (this.opening) return this.opening;
     this.opening = this.open().finally(() => {
       this.opening = null;
@@ -163,6 +165,7 @@ export class DroidExecutor implements Executor {
     const gen = this.rollbackGen;
     this.queuedTurnId = turnId;
     return this.enqueue(async () => {
+      if (this.closed) throw new SpeculationFailed('executor closed');
       if (gen !== this.rollbackGen) return;
       if (this.live) await this.doRollback(this.live.turnId);
       await this.ensureSession();
@@ -200,6 +203,7 @@ export class DroidExecutor implements Executor {
     const rgen = this.resetGen;
     const superseded = (): boolean => gen !== this.rollbackGen || rgen !== this.resetGen;
     return this.enqueue(async () => {
+      if (this.closed) throw new SpeculationFailed('executor closed');
       if (superseded()) return;
       const s = this.session;
       if (!s) return this.fail('no droid session');
@@ -283,8 +287,10 @@ export class DroidExecutor implements Executor {
     });
   }
 
-  // Shutdown: closes the session after everything already queued (a warm included). Leaves git as is.
+  // Shutdown, terminal: later warm() opens nothing and later phases throw. Already-queued work
+  // drains first (a warm queued before close opens nothing), then the session closes. Leaves git as is.
   close(): Promise<void> {
+    this.closed = true;
     return this.enqueue(() => this.closeSession());
   }
 

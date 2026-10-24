@@ -90,11 +90,12 @@ export function makePermissionHandler(guard: Guard, turnIdRef: () => string, emi
 
 // The live CLI types TodoWrite `todos` as a string of checklist lines ("1. [completed] Read x");
 // arrays of strings or {content} objects are accepted too. Same line grammar as the SDK's parseTodos.
-const TODO_LINE = /^(?:\d+[.)]\s*|[-*]\s+)?(?:\[(?:completed|in_progress|pending|[xX]|\s*)\]\s*)?(.*)$/;
+// A list marker (`1.`, `1)`, `-`, `*`) is stripped only when whitespace or the line end follows, so `9.00 AM` stays.
+const TODO_LINE = /^(?:(?:\d+[.)]|[-*])(?:\s+|$))?(?:\[(?:completed|in_progress|pending|[xX]|\s*)\]\s*)?(.*)$/;
 export function todoSteps(todos: unknown): string[] {
   if (Array.isArray(todos)) {
     if (todos.every((t) => typeof t === 'string')) return todoSteps(todos.join('\n'));
-    return todos.map((t) => String((t as { content?: unknown } | null)?.content ?? ''));
+    return todos.map((t) => String((t as { content?: unknown } | null)?.content ?? '').trim()).filter(Boolean);
   }
   if (typeof todos !== 'string') return [];
   if (todos.trim().startsWith('[')) {
@@ -109,7 +110,8 @@ export function todoSteps(todos: unknown): string[] {
     .split('\n')
     .map((l) => l.trim())
     .filter(Boolean)
-    .map((l) => (TODO_LINE.exec(l)?.[1] ?? l).trim());
+    .map((l) => (TODO_LINE.exec(l)?.[1] ?? l).trim())
+    .filter(Boolean);
 }
 
 function outcomeFor(subtype: string): TurnOutcome {

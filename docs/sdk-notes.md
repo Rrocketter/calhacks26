@@ -292,9 +292,9 @@ Experiments: `SPIKE_READ_POLICY=list` gave the same canary result as `home` (all
 
 Live smoke: `pnpm --filter @ahead/server smoke:executor` (`apps/server/scripts/smoke-executor.ts`). A real `Speculator` over `createDroidExecutor`, fed `turn_start`, a fixture `reschedule_event` belief (Priya Q3 review, Friday 2 PM to Monday 2026-11-02 9:00 AM, confidence 0.86), `turn_eager_end`, `turn_end` and a confirm. Run A confirms (commit), Run B rejects (rollback). It forces `AHEAD_WORKSPACE=~/.ahead/workspace-executor` so it never touches `~/.ahead/workspace`, and resets that workspace before each run and at the end. The script waits for Phase 1 to finish before sending eager end, so the two phases time separately. In the live server, eager end can land while Phase 1 is still running.
 
-Both runs passed twice on 2026-10-24 (claude-haiku-5-5, droid CLI v0.249.0). Every run: one `diff` event for `calendar.json` only (471 bytes), `evt-priya-q3` moved to `2026-11-02T09:00:00-08:00` / `10:00:00-08:00` (correct PST offset after the DST change, no template fix needed), no denied tool calls, every event valid, workspace clean on `main` with no `spec/*` branch after commit and after rollback, and `calendar.json` byte-identical to the seed after rollback.
+Both runs passed twice on 2026-10-24 (claude-haiku-5-5, droid CLI v0.249.0). Every run: one `diff` event for `calendar.json` only (471 characters), `evt-priya-q3` moved to `2026-11-02T09:00:00-08:00` / `10:00:00-08:00` (correct PST offset after the DST change, no template fix needed), no denied tool calls, every event valid, workspace clean on `main` with no `spec/*` branch after commit and after rollback, and `calendar.json` byte-identical to the seed after rollback.
 
-| ms | Run 1 commit | Run 1 rollback | Run 2 commit | Run 2 rollback |
+| ms | Run 1 commit (pre-TodoWrite-fix) | Run 1 rollback (pre-TodoWrite-fix) | Run 2 commit | Run 2 rollback |
 |---|---|---|---|---|
 | createSession (first in process / later) | 762 | 447 | 794 | 530 |
 | createSession (warm after commit or rollback) | 594 | 767 | 549 | 572 |
@@ -304,10 +304,10 @@ Both runs passed twice on 2026-10-24 (claude-haiku-5-5, droid CLI v0.249.0). Eve
 | belief lock to diff | 29078 | 19582 | 19339 | 29345 |
 | commit / rollback | 1729 | 1618 | 936 | 1939 |
 
-- No cold/warm split showed up in `createSession`: 447 to 794 ms across all eight sessions, in either process. The first session of a process was not slower than later ones.
+- `createSession` was 447 to 794 ms across all eight sessions, in either process. No clear cold/warm split.
 - Phase 2 is mostly the model checking its own work. The Edit lands 3.8 to 6.4 s into the turn, then the model re-Reads `calendar.json`, updates its TodoWrite plan and writes a summary, and the turn ends at 11 to 14.5 s. The diff is only emitted after the turn ends, so about half of Phase 2 is post-edit. A "stop after the edit" line in the template is the obvious lever; not tried yet.
 - Phase 1 varies from 7 to 16.5 s for the same prompt. The Read lands at 3.1 to 4.0 s; the rest is model time after it (TodoWrite plus reply text).
 - `commit` and `rollback` include `session.close()` (1 to 2 s, as in the spike). The git part is tens of ms.
 - **TodoWrite input is a string, not an array.** The CLI schema is `TodoWriteToolInputSchema = { todos: z.string() }` (`@factory/droid-sdk` `dist/chunk-TWAVPIPS.mjs`), and the model sends checklist lines like `1. [completed] Read calendar.json`. The SDK's own `parseTodos` also accepts arrays and a JSON-array string, but it isn't exported. Run 1 emitted every `plan` event with `steps=0` because `turn.ts` only read arrays; `turn.ts` now parses all those shapes (`todoSteps`, regression test in `turn.test.ts`), and Run 2 showed 4 to 5 steps per plan.
 - No edits in Phase 1 in any run (Phase 1 only Read and TodoWrite), and the model never called a disabled tool.
-- After commit or rollback the state machine warms a fresh session. `DroidExecutor.close()` (queued on the executor chain) shuts it down so a script or a server shutdown can exit cleanly.
+- After commit or rollback the state machine warms a fresh session. `DroidExecutor.close()` shuts it down so a script or a server shutdown can exit cleanly. `close()` is terminal: afterwards `warm()` opens nothing and phases throw `SpeculationFailed('executor closed')`.

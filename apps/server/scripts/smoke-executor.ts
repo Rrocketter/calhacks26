@@ -6,7 +6,6 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { BeliefSchema, parseServerEvent, type Belief, type ServerEvent } from '@ahead/contracts';
 
 // First statement that runs after the (env-free) static imports: env.ts resolves WORKSPACE_DIR at
@@ -203,20 +202,25 @@ async function main(): Promise<void> {
     results.push(await run('commit', true));
     results.push(await run('rollback', false));
   } finally {
-    reset();
+    // A failing reset must not mask the run's own error.
+    try {
+      reset();
+    } catch (e) {
+      console.error(`[smoke] final reset:workspace failed (${e instanceof Error ? e.name : 'error'})`);
+      process.exitCode = 1;
+    }
   }
   const allPass = results.length === 2 && results.every((r) => r.pass);
   console.log(`\n${allPass ? 'PASS' : 'FAIL'} smoke:executor`);
   if (!allPass) process.exitCode = 1;
 }
 
-const isMain = process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
-if (isMain) {
-  main().catch((e: unknown) => {
-    const msg = e instanceof Error ? e.message : String(e);
-    let safe = msg.replace(/\s+/g, ' ');
-    for (const v of Object.values(process.env)) if (v && v.length >= 8) safe = safe.split(v).join('[redacted]');
-    console.error(`[smoke] FAILED ${e instanceof Error ? e.name : 'error'}: ${safe.slice(0, 200)}`);
-    process.exit(1);
-  });
-}
+// Unconditional: no isMain guard. import.meta.url is realpath'd and argv[1] is not, so a guard
+// silently skips main() (exit 0) when the repo is reached through a symlink. Nothing imports this file.
+main().catch((e: unknown) => {
+  const msg = e instanceof Error ? e.message : String(e);
+  let safe = msg.replace(/\s+/g, ' ');
+  for (const v of Object.values(process.env)) if (v && v.length >= 8) safe = safe.split(v).join('[redacted]');
+  console.error(`[smoke] FAILED ${e instanceof Error ? e.name : 'error'}: ${safe.slice(0, 200)}`);
+  process.exit(1);
+});

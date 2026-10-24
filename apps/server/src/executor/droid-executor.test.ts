@@ -488,7 +488,7 @@ test('rollback while phase1 waits for the session open: the phase1 prompt is nev
   assert.deepEqual(specBranches(raw), []);
 });
 
-test('close() closes the warm session opened after commit, on the chain', { timeout: 5000 }, async () => {
+test('close() after commit: the queued warm opens nothing, the session is closed', { timeout: 5000 }, async () => {
   const { f, exec } = setup();
   await exec.phase1('t1', belief());
   await exec.phase2('t1', belief());
@@ -496,8 +496,28 @@ test('close() closes the warm session opened after commit, on the chain', { time
   const w = exec.warm();
   const c = exec.close();
   await Promise.all([a, w, c]);
-  assert.equal(f.sessions.length, 2);
-  assert.deepEqual(f.sessions[1]!.calls, ['close']);
+  assert.equal(f.sessions.length, 1);
+  assert.deepEqual(f.sessions[0]!.calls, ['close']);
+  await exec.warm();
+  assert.equal(f.sessions.length, 1);
   await exec.close(); // idempotent
-  assert.deepEqual(f.sessions[1]!.calls, ['close']);
+  assert.deepEqual(f.sessions[0]!.calls, ['close']);
+});
+
+test('close() is terminal: a later warm() opens nothing', { timeout: 5000 }, async () => {
+  const { f, exec } = setup();
+  await exec.warm();
+  await exec.close();
+  const before = f.sessions.length;
+  await exec.warm();
+  assert.equal(f.sessions.length, before);
+  assert.deepEqual(f.sessions[0]!.calls, ['close']);
+});
+
+test('close() is terminal: phase1 and phase2 reject with SpeculationFailed', { timeout: 5000 }, async () => {
+  const { f, exec } = setup();
+  await exec.close();
+  await assert.rejects(exec.phase1('t1', belief()), (e: unknown) => e instanceof SpeculationFailed && e.message === 'executor closed');
+  await assert.rejects(exec.phase2('t1', belief()), (e: unknown) => e instanceof SpeculationFailed && e.message === 'executor closed');
+  assert.equal(f.sessions.length, 0);
 });
