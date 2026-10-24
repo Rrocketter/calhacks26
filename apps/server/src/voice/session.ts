@@ -24,6 +24,7 @@ export class VoiceSession {
   private readonly now: () => number;
   private readonly mockBelief: boolean;
   private readonly mockSpeed: number;
+  private readonly onTurnEnd?: (turnId: string, finalText: string) => void;
   private readonly tracker = new TurnTracker();
   private badRateReported = false;
   private interjectedTurn: string | null = null;
@@ -42,6 +43,8 @@ export class VoiceSession {
     now?: () => number;
     mockBelief?: boolean;
     mockSpeed?: number;
+    /** When set, replaces the canned TURN_END_REPLY: the caller decides what to say. */
+    onTurnEnd?: (turnId: string, finalText: string) => void;
   }) {
     this.send = deps.send;
     this.ink = deps.ink;
@@ -50,6 +53,7 @@ export class VoiceSession {
     this.now = deps.now ?? Date.now;
     this.mockBelief = deps.mockBelief ?? false;
     this.mockSpeed = deps.mockSpeed ?? 1;
+    this.onTurnEnd = deps.onTurnEnd;
   }
 
   /** Stop reacting to anything; called when the browser socket closes. */
@@ -110,7 +114,8 @@ export class VoiceSession {
       } else if (ev.type === 'transcript_final') {
         finalText = ev.text.trim();
       } else if (ev.type === 'turn_end' && finalText !== '') {
-        this.speaker.speak(TURN_END_REPLY, { interrupt: false, turnId: ev.turnId });
+        if (this.onTurnEnd) this.onTurnEnd(ev.turnId, finalText);
+        else this.speaker.speak(TURN_END_REPLY, { interrupt: false, turnId: ev.turnId });
       }
     }
   }

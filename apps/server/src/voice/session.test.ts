@@ -7,7 +7,14 @@ import { TURN_END_REPLY, VoiceSession, type Speaker } from './session.js';
 
 type SpeakCall = { text: string; opts: { interrupt: boolean; turnId: string }; id: string };
 
-function setup(extra: { mockBelief?: boolean; mockSpeed?: number; useRealClock?: boolean } = {}) {
+function setup(
+  extra: {
+    mockBelief?: boolean;
+    mockSpeed?: number;
+    useRealClock?: boolean;
+    onTurnEnd?: (turnId: string, finalText: string) => void;
+  } = {},
+) {
   const sent: ServerEvent[] = [];
   const pcm: Buffer[] = [];
   const speaks: SpeakCall[] = [];
@@ -33,6 +40,7 @@ function setup(extra: { mockBelief?: boolean; mockSpeed?: number; useRealClock?:
     now: extra.useRealClock ? Date.now : () => now,
     mockBelief: extra.mockBelief,
     mockSpeed: extra.mockSpeed,
+    onTurnEnd: extra.onTurnEnd,
   });
   return { session, sent, pcm, speaks, cancels, setNow: (t: number) => (now = t) };
 }
@@ -82,6 +90,25 @@ test('turn end speaks the canned reply', () => {
   assert.equal(speaks.length, 1);
   assert.equal(speaks[0]?.text, TURN_END_REPLY);
   assert.deepEqual(speaks[0]?.opts, { interrupt: false, turnId: startedTurnId(sent) });
+});
+
+test('turn_end with onTurnEnd set calls it with the final text and speaks nothing', () => {
+  const calls: Array<[string, string]> = [];
+  const { session, sent, speaks } = setup({ onTurnEnd: (id, text) => calls.push([id, text]) });
+  session.handleInk({ type: 'turn.start' });
+  session.handleInk({ type: 'turn.update', transcript: 'hi there' });
+  session.handleInk({ type: 'turn.end', transcript: 'hi there' });
+  assert.deepEqual(calls, [[startedTurnId(sent), 'hi there']]);
+  assert.equal(speaks.length, 0);
+});
+
+test('turn_end with onTurnEnd set and empty final calls nothing', () => {
+  const calls: Array<[string, string]> = [];
+  const { session, speaks } = setup({ onTurnEnd: (id, text) => calls.push([id, text]) });
+  session.handleInk({ type: 'turn.start' });
+  session.handleInk({ type: 'turn.end', transcript: '' });
+  assert.equal(calls.length, 0);
+  assert.equal(speaks.length, 0);
 });
 
 test('mic is dropped while TTS plays', () => {
