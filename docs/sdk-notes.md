@@ -315,7 +315,7 @@ Experiments: `SPIKE_READ_POLICY=list` gave the same canary result as `home` (all
 
 - First call in a process: 2898 ms (includes TLS setup and probably schema compilation).
 - Next 6 calls: 1508 to 1626 ms (about 1.5 s steady state). Every call returned `draft_message` at confidence 0.9.
-- That is slower than the ~1 s we planned for. The Moss loop doesn't wait on it (calls are fire-and-forget, one in flight per turn), but the lock lands about 1.5 s after the partial that triggered it. A warm-up call at startup would remove the cold-start cost.
+- That is slower than the ~1 s we planned for. The Moss loop doesn't wait on it (calls are fire-and-forget, up to `MAX_LLM_IN_FLIGHT: 2` in flight per turn), but the lock lands about 1.5 s after the partial that triggered it. A warm-up call at startup would remove the cold-start cost.
 
 ### Belief replay (Lane B)
 
@@ -333,3 +333,19 @@ After the tracker fixes (LLM call on the first changed partial, up to `MAX_LLM_I
 - Haiku calls (including warm-up): 51 calls, 683 ms to 2255 ms, p50 1419 ms. 7 to 8 streaming calls plus 1 final call per turn (was 5 to 6).
 - Final belief arrives 1.15 to 1.66 s after `transcript_final` (one final Haiku call). Before the fix it was up to about 10 s, because the eager end waited for every in-flight call.
 - Moss: 50 queries per turn, p50 15 to 17 ms, p95 28 to 32 ms (concurrent wall time; the extra LLM traffic shares the event loop).
+
+#### Moss: sequential vs `Promise.all` (measured 2026-10-24)
+
+The tracker now logs Moss once per changed partial as `[moss] step X.Xms (N queries)`: the wall time of that partial's whole batch. `MossIndex.query` still logs each query as `[moss] query X.Xms`; the tracker no longer logs it a second time. `belief.latencyMs.moss` is that batch wall time (it used to be the max per-query time). The replay prints it per partial (`step`) and as `moss step` p50/p95 in the verdict.
+
+A/B with the stricter verdict, 3 runs each way (16 changed partials, 50 queries per turn):
+
+| | per-query p50 | per-query p95 | step p50 | step p95 | verdict |
+| --- | --- | --- | --- | --- | --- |
+| sequential (`for ... await`) | 4.6 to 5.7 ms | 18.1 to 21.1 ms | 20.8 to 25.6 ms | 35.1 to 36.7 ms | 3 PASS |
+| `Promise.all` | 9.9 to 17.0 ms | 23.8 to 30.5 ms | 16.7 to 26.9 ms | 26.4 to 33.9 ms | 3 PASS |
+
+- Step p50 is about the same either way. Step p95 is a few ms higher sequential. Both are far under the 250 ms gap between partials.
+- Sequential gives honest per-query numbers (each query's time is its own), so the tracker runs queries in sequence.
+- In sequential runs the first query of a step is usually the slowest (10 to 25 ms) and the rest take 2 to 6 ms. Hypothesis, not shown: the first query after an idle gap pays a warm-up cost, or shares the event loop with Haiku responses landing at the same time. The standalone spike measured about 2 ms per query with nothing else running.
+- The replay verdict now also requires: the lock lands before the Thursday partial arrives (not just attributed to an earlier partial), the interject lands before the next partial arrives, the lock is `draft_message` with person `Priya Shah`, and the interject text is exactly `Heads up, Priya's meeting is Friday, not Thursday. Say Friday?`.
