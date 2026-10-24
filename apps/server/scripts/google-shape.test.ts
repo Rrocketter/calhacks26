@@ -134,3 +134,21 @@ test('corpus: all-day event with no location reads cleanly', () => {
   const d = shaped().corpus.find((x) => x.id === 'g-evt-allday_1')!;
   assert.equal(d.text, 'Offsite. Thursday, November 12 at 12 AM.');
 });
+
+test('threads: format=metadata (headers + snippet, no body) uses the snippet', () => {
+  const meta: GThread = {
+    id: 'tm',
+    messages: [{
+      id: 'mm',
+      internalDate: String(Date.parse('2026-10-23T18:00:00Z')),
+      snippet: 'Let&#39;s meet at 3 &amp; bring the deck',
+      payload: { mimeType: 'multipart/alternative', headers: [
+        { name: 'Subject', value: 'Friday' },
+        { name: 'From', value: 'Lena Okafor <lena.okafor@example.com>' },
+      ] },
+    }],
+  };
+  const [m] = shapeThreads([meta], SELF, TZ).kept;
+  assert.equal(m!.body, "Let's meet at 3 & bring the deck");
+  assert.equal(m!.date, '2026-10-23');
+});
