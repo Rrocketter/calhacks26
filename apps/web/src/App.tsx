@@ -64,15 +64,16 @@ export function App() {
       if (e.type !== 'tts_audio_chunk') push(e.type);
       switch (e.type) {
         case 'turn_start':
-          setTurnId(e.turnId);
+          // Ink can send a phantom turn_start right after a timeout turn_end; don't touch turnEndAt here.
           setPartial('');
-          turnEndAt = 0;
           break;
         case 'transcript_partial':
           setPartial(e.text);
           // Mirror the server: only real speech (first non-empty partial) cuts a reply, once per turn.
           if (e.text.trim() !== '' && cutTurn !== e.turnId) {
             cutTurn = e.turnId;
+            setTurnId(e.turnId);
+            turnEndAt = 0;
             player.stopNow();
           }
           break;
@@ -81,6 +82,7 @@ export function App() {
           setPartial('');
           break;
         case 'turn_end':
+          setTurnId(e.turnId);
           turnEndAt = performance.now();
           setTtfa({});
           break;

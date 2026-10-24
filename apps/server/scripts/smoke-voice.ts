@@ -11,7 +11,7 @@ import WebSocket from 'ws';
 const FRAME_BYTES = 3200; // 100 ms at 16 kHz s16le mono
 const FRAME_MS = 100;
 const TURN_TIMEOUT_MS = 20000;
-const PORT = Number(process.env.PORT ?? 8787);
+const PORT = Number(process.env.AHEAD_SERVER_PORT ?? 8787);
 const TWICE = process.argv.includes('--twice');
 const MOCK = process.argv.includes('--mock'); // pass when the server runs with AHEAD_MOCK_BELIEF=1
 

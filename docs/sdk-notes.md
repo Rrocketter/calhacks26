@@ -334,7 +334,7 @@ Experiments: `SPIKE_READ_POLICY=list` gave the same canary result as `home` (all
 
 ## Lane A browser audio
 
-- The Vite dev server proxies `/ws` to `ws://localhost:8787` (`ws: true`); the page connects to `ws://<location.host>/ws`. Verified headless: smoke-voice with `PORT=5173` gets partials and Sonic chunks through the proxy.
+- The Vite dev server proxies `/ws` to `ws://localhost:8787` (`ws: true`); the page connects to `ws://<location.host>/ws`. Verified headless: smoke-voice with `AHEAD_SERVER_PORT=5173` gets partials and Sonic chunks through the proxy.
 - Capture runs an `AudioContext({sampleRate:16000})` with an AudioWorklet and sends 100 ms s16le chunks. Playback uses the default context rate and schedules `AudioBuffer`s gaplessly per Sonic `contextId`.
 
 ### Lane A live measurements

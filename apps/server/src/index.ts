@@ -7,7 +7,7 @@ import { EstimatedPlaybackClock } from './voice/playback-clock.js';
 import { VoiceSession } from './voice/session.js';
 import { SonicClient } from './voice/sonic-client.js';
 
-const PORT = Number(process.env.PORT ?? 8787);
+const PORT = Number(process.env.AHEAD_SERVER_PORT ?? 8787);
 const MOCK_BELIEF = process.env.AHEAD_MOCK_BELIEF === '1';
 const apiKey = requireEnv('CARTESIA_API_KEY');
 
@@ -61,6 +61,6 @@ wss.on('connection', (ws) => {
   ws.on('error', (err) => console.error(`[voice] client socket error ${err.message}`));
 });
 
-http.listen(PORT, () => {
+http.listen(PORT, 'localhost', () => {
   console.log(`[voice] listening ws://localhost:${PORT}/ws${MOCK_BELIEF ? ' (AHEAD_MOCK_BELIEF=1)' : ''}`);
 });

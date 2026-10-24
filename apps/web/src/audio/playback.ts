@@ -74,6 +74,10 @@ export class PcmPlayer {
     }
     this.currentContext = null;
     if (!this.ctx || !this.gain) return;
+    if (this.sources.size === 0) {
+      this.nextStart = 0; // nothing playing: no fade, no gain change
+      return;
+    }
     const t = this.ctx.currentTime;
     const gain = this.gain;
     gain.gain.cancelScheduledValues(t);

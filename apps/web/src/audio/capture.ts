@@ -13,6 +13,7 @@ export async function startCapture(onChunk: (ev: AudioChunk) => void): Promise<(
   });
   const ctx = new AudioContext({ sampleRate: SAMPLE_RATE });
   try {
+    await ctx.resume();
     await ctx.audioWorklet.addModule('/pcm-capture-worklet.js');
   } catch (err) {
     stream.getTracks().forEach((t) => t.stop());
