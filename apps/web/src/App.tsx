@@ -19,6 +19,7 @@ export function App() {
   const [startError, setStartError] = useState<string | null>(null);
   const transport = useRef<Transport | null>(null);
   const mock = useRef<MockSocket | null>(null);
+  const stopping = useRef(false); // Stop pressed: the close that follows is not an error
 
   useEffect(
     () => () => {
@@ -33,6 +34,7 @@ export function App() {
     if (starting || running) return;
     setStarting(true);
     setStartError(null);
+    stopping.current = false;
     dispatch({ type: 'reset' });
     startLive({
       onEvent: (e) => {
@@ -42,6 +44,7 @@ export function App() {
       onClosed: () => {
         transport.current = null;
         setRunning(false);
+        if (!stopping.current) setStartError('connection closed');
       },
     }).then(
       (t) => {
@@ -58,6 +61,7 @@ export function App() {
 
   function demo() {
     if (mode === 'live') {
+      dispatch({ type: 'reset' });
       transport.current?.send({ type: 'demo_control', action: 'start', fixture: 'demo-utterance-1' });
       return;
     }
@@ -88,12 +92,15 @@ export function App() {
         running={running}
         starting={starting}
         onStart={start}
-        onStop={() => transport.current?.stop()}
+        onStop={() => {
+          stopping.current = true;
+          transport.current?.stop();
+        }}
         onDemo={demo}
       />
       <Transcript hud={hud} error={hud.error ?? startError} />
       <BeliefPanel hud={hud} />
-      <ExecutorPanel hud={hud} onConfirm={confirm} />
+      <ExecutorPanel hud={hud} canSend={running || mode === 'mock'} onConfirm={confirm} />
     </div>
   );
 }

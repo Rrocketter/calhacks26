@@ -10,13 +10,16 @@ export type Interject = {
   wordIndex: number | null;
 };
 export type HudState = {
-  turnId: string | null; // current turn (turn_start)
+  turnId: string | null; // current turn: promoted from turn_start once it speaks
+  // Ink can send a bare turn_start right after a timeout turn_end, so a new turn only takes
+  // over on its first non-empty transcript; until then the finished turn's late events still land.
+  pendingTurnId: string | null;
   partial: string;
-  eagerEnd: boolean; // turn_eager_end seen, cleared by turn_resume / turn_start
+  eagerEnd: boolean; // turn_eager_end seen, cleared by turn_resume / promotion
   finals: FinalLine[]; // last 3
-  interject: Interject | null; // cleared at next turn_start; the highlight survives in finals
+  interject: Interject | null; // cleared at promotion; the highlight survives in finals
   belief: Belief | null;
-  moss: { count: number; totalMs: number; lastMs: number | null }; // reset at turn_start
+  moss: { count: number; totalMs: number; lastMs: number | null }; // reset at promotion
   stateTurnId: string | null;
   state: State;
   reached: State[]; // states seen for stateTurnId, in arrival order, no duplicates
@@ -34,6 +37,7 @@ export type HudAction = ServerEvent | { type: 'client_ttfa'; ms: number } | { ty
 export function initialHud(): HudState {
   return {
     turnId: null,
+    pendingTurnId: null,
     partial: '',
     eagerEnd: false,
     finals: [],
@@ -78,6 +82,37 @@ function resolveInterject(s: HudState, turnId: string, text: string): Interject 
 function lastIndex(text: string): number | null {
   const n = words(text).length;
   return n ? n - 1 : null;
+}
+
+// The claim the interject text names; the tracker may fire on any claim, not just the first.
+function interjectSaid(belief: Belief | null, text: string): string | null {
+  const claims = belief?.claims ?? [];
+  const hay = ` ${words(text).map(norm).join(' ')} `;
+  const hit = claims.find((c) => {
+    const said = words(c.said).map(norm).filter(Boolean).join(' ');
+    return said !== '' && hay.includes(` ${said} `);
+  });
+  return (hit ?? claims[0])?.said ?? null;
+}
+
+function promote(s: HudState, turnId: string): HudState {
+  return {
+    ...s,
+    turnId,
+    pendingTurnId: null,
+    partial: '',
+    eagerEnd: false,
+    interject: null,
+    moss: { count: 0, totalMs: 0, lastMs: null },
+    error: null,
+  };
+}
+
+// A transcript for another turn takes over only with real text, and never for a finished turn.
+function claimTurn(s: HudState, turnId: string, text: string): HudState | null {
+  if (turnId === s.turnId) return s;
+  if (text.trim() === '' || s.finals.some((f) => f.turnId === turnId)) return null;
+  return promote(s, turnId);
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
@@ -132,21 +167,19 @@ export function hudReducer(s: HudState, a: HudAction): HudState {
     case 'client_ttfa':
       return { ...s, ttfa: { ...s.ttfa, client: a.ms } };
     case 'turn_start':
-      return {
-        ...s,
-        turnId: a.turnId,
-        partial: '',
-        eagerEnd: false,
-        interject: null,
-        moss: { count: 0, totalMs: 0, lastMs: null },
-      };
-    case 'transcript_partial':
-      return { ...s, partial: a.text, interject: resolveInterject(s, a.turnId, a.text) };
+      return s.turnId === null ? promote(s, a.turnId) : { ...s, pendingTurnId: a.turnId };
+    case 'transcript_partial': {
+      const t = claimTurn(s, a.turnId, a.text);
+      if (!t) return s;
+      return { ...t, partial: a.text, interject: resolveInterject(t, a.turnId, a.text) };
+    }
     case 'transcript_final': {
-      const interject = resolveInterject(s, a.turnId, a.text);
+      const t = claimTurn(s, a.turnId, a.text);
+      if (!t) return s;
+      const interject = resolveInterject(t, a.turnId, a.text);
       const highlight = interject && interject.turnId === a.turnId ? interject.wordIndex : null;
-      const finals = [...s.finals, { turnId: a.turnId, text: a.text, highlight }].slice(-3);
-      return { ...s, partial: '', finals, interject };
+      const finals = [...t.finals, { turnId: a.turnId, text: a.text, highlight }].slice(-3);
+      return { ...t, partial: '', finals, interject };
     }
     case 'turn_eager_end':
       return { ...s, eagerEnd: true };
@@ -167,7 +200,7 @@ export function hudReducer(s: HudState, a: HudAction): HudState {
         },
       };
     case 'interject': {
-      const said = s.belief?.claims[0]?.said ?? null;
+      const said = interjectSaid(s.belief, a.text);
       const wordIndex = said === null ? lastIndex(s.partial) : findWord(s.partial, said);
       return { ...s, interject: { turnId: a.turnId, text: a.text, said, wordIndex } };
     }

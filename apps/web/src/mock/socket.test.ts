@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ServerEvent } from '@ahead/contracts';
 import { MockSocket, type ReplayOpts } from './socket';
+import { hudReducer, initialHud, words } from '../hud/state';
 
 const FAST: ReplayOpts = { speed: 50, autoConfirmMs: 20 };
 // The droid mock ignores `speed` (about 2 s of real sleeps), so drive time with fake timers.
@@ -45,6 +46,14 @@ describe('MockSocket', () => {
     expect(idx(evs, (e) => e.type === 'state_change' && e.state === 'STAGED')).toBeGreaterThan(eager);
     expect(idx(evs, (e) => e.type === 'droid_event' && e.kind === 'diff')).toBeGreaterThan(eager);
     expect(evs).toContainEqual({ type: 'metric', source: 'sonic', label: 'ttfa', ms: 180 });
+  });
+
+  it('drives the hud to COMMITTED with Thursday highlighted', async () => {
+    const hud = (await replay()).reduce(hudReducer, initialHud());
+    expect(hud.state).toBe('COMMITTED');
+    expect(hud.moss.count).toBeGreaterThan(0);
+    const last = hud.finals.at(-1);
+    expect(last && last.highlight !== null && words(last.text)[last.highlight]).toMatch(/^Thursday/);
   });
 
   it('auto-confirms by default when autoConfirmMs is omitted', async () => {

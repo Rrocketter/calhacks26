@@ -534,8 +534,29 @@ mark {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  flex: none;
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 30%;
+  overflow: hidden;
   font-size: 18px;
+}
+
+.row.more {
+  color: var(--faint);
+  font-size: 16px;
+}
+
+.tag.dim {
+  color: var(--dim);
+  border-color: var(--line);
+}
+
+/* A previous turn's executor output: shown, but clearly not live */
+.executor.prior .feed,
+.executor.prior .diffs,
+.executor.prior .diffs-spacer,
+.executor.prior .result {
+  opacity: 0.4;
 }
 
 .row {

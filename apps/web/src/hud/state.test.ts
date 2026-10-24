@@ -56,7 +56,7 @@ describe('hudReducer', () => {
     s = run([{ type: 'transcript_final', turnId: 't1', text: TEXT, ts: 0 }], s);
     expect(s.finals.at(-1)?.highlight).toBe(9);
     expect(s.partial).toBe('');
-    s = run([start('t2')], s);
+    s = run([start('t2'), partial('t2', 'Also')], s);
     expect(s.interject).toBeNull();
     expect(s.finals.at(-1)?.highlight).toBe(9);
   });
@@ -73,11 +73,54 @@ describe('hudReducer', () => {
     expect(s.interject?.wordIndex).toBe(9);
   });
 
-  it('counts moss hits and resets at turn_start', () => {
+  it('counts moss hits and resets when the next turn speaks', () => {
     let s = run([start('t1'), moss('t1', 2), moss('t1', 3)]);
     expect(s.moss).toEqual({ count: 2, totalMs: 5, lastMs: 3 });
-    s = run([start('t2')], s);
+    s = run([start('t2'), partial('t2', 'Hey')], s);
     expect(s.moss.count).toBe(0);
+  });
+
+  it('keeps the finished turn live across a bare turn_start', () => {
+    let s = run([
+      start('t1'),
+      partial('t1', TEXT),
+      moss('t1', 2),
+      { type: 'transcript_final', turnId: 't1', text: TEXT, ts: 0 },
+      { type: 'error', message: 'boom' },
+      start('t2'),
+      partial('t2', ''),
+      { type: 'belief_update', turnId: 't1', belief: belief('Thursday') },
+      moss('t1', 4),
+    ]);
+    expect(s.turnId).toBe('t1');
+    expect(s.belief?.claims[0]?.said).toBe('Thursday');
+    expect(s.moss).toEqual({ count: 2, totalMs: 6, lastMs: 4 });
+    s = run([partial('t2', 'Also')], s);
+    expect(s.turnId).toBe('t2');
+    expect(s.partial).toBe('Also');
+    expect(s.moss).toEqual({ count: 0, totalMs: 0, lastMs: null });
+    expect(s.error).toBeNull();
+    // A late partial for the finished turn doesn't take the turn back.
+    s = run([partial('t1', TEXT)], s);
+    expect(s.turnId).toBe('t2');
+  });
+
+  it('highlights the claim the interject is about', () => {
+    const b: Belief = {
+      ...belief('Thursday'),
+      claims: [
+        { field: 'time', said: '3pm', known: '4pm', docId: 'd2' },
+        { field: 'day', said: 'Thursday', known: 'Friday', docId: 'd1' },
+      ],
+    };
+    const s = run([
+      start('t1'),
+      partial('t1', TEXT),
+      { type: 'belief_update', turnId: 't1', belief: b },
+      { type: 'interject', turnId: 't1', text: "Heads up, Priya's meeting is Friday, not Thursday. Say Friday?" },
+    ]);
+    expect(s.interject?.said).toBe('Thursday');
+    expect(s.interject?.wordIndex).toBe(9);
   });
 
   it('ignores stale belief and moss events', () => {
@@ -85,6 +128,7 @@ describe('hudReducer', () => {
       start('t1'),
       { type: 'belief_update', turnId: 't1', belief: belief('Thursday') },
       start('t2'),
+      partial('t2', 'Hey'),
       { type: 'belief_update', turnId: 't1', belief: belief('Monday') },
       moss('t1', 2),
     ]);

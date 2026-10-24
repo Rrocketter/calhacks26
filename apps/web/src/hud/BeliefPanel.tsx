@@ -55,8 +55,8 @@ export function BeliefPanel({ hud }: { hud: HudState }) {
       <div className="section hits">
         <span className="label">Top hits</span>
         {hits.length === 0 && <span className="empty">No hits yet</span>}
-        {hits.map((h) => (
-          <div className="hit" key={h.docId}>
+        {hits.map((h, i) => (
+          <div className="hit" key={`${h.docId}-${i}`}>
             <div className="hit-head">
               <span className="doc">{h.docId}</span>
               <span className="score num">{h.score.toFixed(2)}</span>

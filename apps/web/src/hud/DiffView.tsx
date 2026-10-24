@@ -1,6 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { parseUnifiedDiff, type DiffLine } from './diff';
-import type { DroidResult } from './state';
 
 type Body = Extract<DiffLine, { oldNo: number | null }>;
 const isBody = (l: DiffLine): l is Body => l.kind === 'add' || l.kind === 'del' || l.kind === 'ctx';
@@ -12,7 +11,10 @@ function indentOf(lines: Body[]): number {
   return widths.length ? Math.min(...widths) : 0;
 }
 
-export function DiffView({ diffs, result }: { diffs: { file: string; diff: string }[]; result: DroidResult | null }) {
+// mark: red treatment with a tag (STALE, ROLLED BACK) and an optional note.
+type Mark = { tag: string; note?: string } | null;
+
+export function DiffView({ diffs, mark }: { diffs: { file: string; diff: string }[]; mark: Mark }) {
   const box = useRef<HTMLDivElement>(null);
   const [clipped, setClipped] = useState(false);
   const measure = () => {
@@ -29,9 +31,8 @@ export function DiffView({ diffs, result }: { diffs: { file: string; diff: strin
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
-  const stale = result?.failed === true;
   return (
-    <div ref={box} className={['diffs', stale && 'stale', clipped && 'clipped'].filter(Boolean).join(' ')}>
+    <div ref={box} className={['diffs', mark && 'stale', clipped && 'clipped'].filter(Boolean).join(' ')}>
       {diffs.map(({ file, diff }) => {
         const lines = parseUnifiedDiff(diff);
         const cut = indentOf(lines.filter(isBody));
@@ -39,9 +40,9 @@ export function DiffView({ diffs, result }: { diffs: { file: string; diff: strin
           <div className="diff" key={file}>
             <div className="diff-file">
               <span className="num">{file}</span>
-              {stale && <span className="tag bad">STALE</span>}
+              {mark && <span className="tag bad">{mark.tag}</span>}
             </div>
-            {stale && result && <div className="stale-note">{result.summary}</div>}
+            {mark?.note && <div className="stale-note">{mark.note}</div>}
             <div className="diff-body num">
               {lines.map((l, i) =>
                 l.kind === 'meta' ? null : l.kind === 'hunk' ? (
