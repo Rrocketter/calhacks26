@@ -1,0 +1,61 @@
+{
+  "turnId": "demo-1",
+  "partials": [
+    {
+      "atMs": 250,
+      "text": "Draft"
+    },
+    {
+      "atMs": 500,
+      "text": "Draft a"
+    },
+    {
+      "atMs": 750,
+      "text": "Draft a message"
+    },
+    {
+      "atMs": 1000,
+      "text": "Draft a message to"
+    },
+    {
+      "atMs": 1250,
+      "text": "Draft a message to Priya"
+    },
+    {
+      "atMs": 1500,
+      "text": "Draft a message to Priya saying"
+    },
+    {
+      "atMs": 1750,
+      "text": "Draft a message to Priya saying I'll"
+    },
+    {
+      "atMs": 2000,
+      "text": "Draft a message to Priya saying I'll see"
+    },
+    {
+      "atMs": 2250,
+      "text": "Draft a message to Priya saying I'll see her"
+    },
+    {
+      "atMs": 2500,
+      "text": "Draft a message to Priya saying I'll see her Thursday"
+    },
+    {
+      "atMs": 2750,
+      "text": "Draft a message to Priya saying I'll see her Thursday at"
+    },
+    {
+      "atMs": 3000,
+      "text": "Draft a message to Priya saying I'll see her Thursday at two"
+    },
+    {
+      "atMs": 3250,
+      "text": "Draft a message to Priya saying I'll see her Thursday at two for"
+    },
+    {
+      "atMs": 3500,
+      "text": "Draft a message to Priya saying I'll see her Thursday at two for the"
+    }
+  ]
+}
