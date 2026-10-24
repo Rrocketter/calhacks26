@@ -14,11 +14,11 @@ export type SmEvent =
   | { type: 'confirm'; apply: boolean };
 
 export type Effect =
-  | { type: 'phase1'; belief: Belief }
-  | { type: 'phase2'; belief: Belief }
-  | { type: 'reset_phase1' }
-  | { type: 'commit' }
-  | { type: 'rollback' }
+  | { type: 'phase1'; turnId: string; belief: Belief }
+  | { type: 'phase2'; turnId: string; belief: Belief }
+  | { type: 'reset_phase1'; turnId: string }
+  | { type: 'commit'; turnId: string }
+  | { type: 'rollback'; turnId: string }
   | { type: 'warm' }
   | { type: 'state'; state: State };
 
@@ -30,6 +30,8 @@ export type SmCtx = {
   phase2Sent: boolean;
   turnEnded: boolean;
   pendingApply: boolean | null;
+  // Set by failed / confirm(false): the user or executor rejected this turn, so no relock.
+  noRelock: boolean;
 };
 
 type Result = { ctx: SmCtx; effects: Effect[] };
@@ -43,15 +45,16 @@ export function initial(): SmCtx {
     phase2Sent: false,
     turnEnded: false,
     pendingApply: null,
+    noRelock: false,
   };
 }
 
 export function transition(ctx: SmCtx, ev: SmEvent): Result {
   if (ev.type === 'turn_start') {
-    return {
-      ctx: { ...initial(), turnId: ev.turnId },
-      effects: [{ type: 'state', state: 'LISTENING' }],
-    };
+    const fresh: SmCtx = { ...initial(), turnId: ev.turnId };
+    const live = ctx.turnId !== null && (ctx.state === 'SPECULATING' || ctx.state === 'STAGED');
+    const dropped: Effect[] = live ? [{ type: 'rollback', turnId: ctx.turnId! }, { type: 'warm' }] : [];
+    return { ctx: fresh, effects: [...dropped, { type: 'state', state: 'LISTENING' }] };
   }
   if (ctx.turnId === null || ctx.state === 'COMMITTED') return { ctx, effects: [] };
   switch (ev.type) {
@@ -60,23 +63,16 @@ export function transition(ctx: SmCtx, ev: SmEvent): Result {
     case 'eager_end':
       return sendPhase2(ctx);
     case 'phase2_done':
-      if (ctx.state !== 'SPECULATING' || !ctx.phase2Sent) return { ctx, effects: [] };
-      {
-        const staged: Result = {
-          ctx: { ...ctx, state: 'STAGED' },
-          effects: [{ type: 'state', state: 'STAGED' }],
-        };
-        if (ctx.pendingApply !== true) return staged;
-        const done = commit(staged.ctx);
-        return { ctx: done.ctx, effects: [...staged.effects, ...done.effects] };
-      }
+      return onPhase2Done(ctx);
     case 'failed':
-      return ctx.state === 'SPECULATING' || ctx.state === 'STAGED' ? rollback(ctx) : { ctx, effects: [] };
+      return ctx.state === 'SPECULATING' || ctx.state === 'STAGED'
+        ? rollback({ ...ctx, noRelock: true })
+        : { ctx, effects: [] };
     case 'resume':
       if (!(ctx.state === 'STAGED' || (ctx.state === 'SPECULATING' && ctx.phase2Sent))) return { ctx, effects: [] };
       return {
         ctx: { ...ctx, state: 'SPECULATING', phase2Sent: false },
-        effects: [{ type: 'reset_phase1' }, { type: 'state', state: 'SPECULATING' }],
+        effects: [{ type: 'reset_phase1', turnId: ctx.turnId }, { type: 'state', state: 'SPECULATING' }],
       };
     case 'turn_end':
       return onTurnEnd(ctx, ev.belief);
@@ -85,6 +81,14 @@ export function transition(ctx: SmCtx, ev: SmEvent): Result {
     default:
       return { ctx, effects: [] };
   }
+}
+
+function onPhase2Done(ctx: SmCtx): Result {
+  if (ctx.state !== 'SPECULATING' || !ctx.phase2Sent) return { ctx, effects: [] };
+  const staged: Result = { ctx: { ...ctx, state: 'STAGED' }, effects: [{ type: 'state', state: 'STAGED' }] };
+  if (ctx.pendingApply !== true) return staged;
+  const done = commit(staged.ctx);
+  return { ctx: done.ctx, effects: [...staged.effects, ...done.effects] };
 }
 
 function onTurnEnd(prev: SmCtx, belief: Belief | null): Result {
@@ -97,13 +101,13 @@ function onTurnEnd(prev: SmCtx, belief: Belief | null): Result {
 function commit(ctx: SmCtx): Result {
   return {
     ctx: { ...ctx, state: 'COMMITTED', pendingApply: null },
-    effects: [{ type: 'commit' }, { type: 'state', state: 'COMMITTED' }, { type: 'warm' }],
+    effects: [{ type: 'commit', turnId: ctx.turnId! }, { type: 'state', state: 'COMMITTED' }, { type: 'warm' }],
   };
 }
 
 function onConfirm(ctx: SmCtx, apply: boolean): Result {
   if (ctx.state !== 'SPECULATING' && ctx.state !== 'STAGED') return { ctx, effects: [] };
-  if (!apply) return rollback(ctx);
+  if (!apply) return rollback({ ...ctx, noRelock: true });
   return ctx.state === 'STAGED' ? commit(ctx) : { ctx: { ...ctx, pendingApply: true }, effects: [] };
 }
 
@@ -112,7 +116,7 @@ function sendPhase2(ctx: SmCtx): Result {
   if (ctx.state !== 'SPECULATING' || ctx.phase2Sent) return { ctx, effects: [] };
   const belief = ctx.latest && ctx.latest.intent !== 'unknown' ? ctx.latest : ctx.locked;
   if (!belief) return { ctx, effects: [] };
-  return { ctx: { ...ctx, phase2Sent: true }, effects: [{ type: 'phase2', belief }] };
+  return { ctx: { ...ctx, phase2Sent: true }, effects: [{ type: 'phase2', turnId: ctx.turnId!, belief }] };
 }
 
 function diverged(ctx: SmCtx, intent: Intent): boolean {
@@ -122,25 +126,27 @@ function diverged(ctx: SmCtx, intent: Intent): boolean {
 function rollback(ctx: SmCtx): Result {
   return {
     ctx: { ...ctx, state: 'ROLLED_BACK', locked: null, phase2Sent: false, pendingApply: null },
-    effects: [{ type: 'rollback' }, { type: 'state', state: 'ROLLED_BACK' }, { type: 'warm' }],
+    effects: [{ type: 'rollback', turnId: ctx.turnId! }, { type: 'state', state: 'ROLLED_BACK' }, { type: 'warm' }],
   };
 }
 
 function onBelief(prev: SmCtx, belief: Belief): Result {
   let ctx: SmCtx = { ...prev, latest: belief };
   const effects: Effect[] = [];
-  if (ctx.state === 'SPECULATING' && diverged(ctx, belief.intent)) return rollback(ctx);
+  if ((ctx.state === 'SPECULATING' || ctx.state === 'STAGED') && diverged(ctx, belief.intent)) return rollback(ctx);
   if (ctx.state === 'LISTENING') {
     ctx = { ...ctx, state: 'BELIEF_FORMING' };
     effects.push({ type: 'state', state: 'BELIEF_FORMING' });
   }
   if (
     (ctx.state === 'BELIEF_FORMING' || ctx.state === 'ROLLED_BACK') &&
+    !ctx.turnEnded &&
+    !ctx.noRelock &&
     belief.confidence >= LOCK_CONFIDENCE &&
     SPECULATIVE.includes(belief.intent)
   ) {
     ctx = { ...ctx, state: 'SPECULATING', locked: belief };
-    effects.push({ type: 'phase1', belief }, { type: 'state', state: 'SPECULATING' });
+    effects.push({ type: 'phase1', turnId: ctx.turnId!, belief }, { type: 'state', state: 'SPECULATING' });
   }
   return { ctx, effects };
 }
