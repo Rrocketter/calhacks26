@@ -34,13 +34,21 @@ interface Fake extends DroidLike {
 // `events` yield in order; `hang` makes the stream wait forever after the last event.
 function fake(events: DroidStreamEvent[], opts: { hang?: boolean; throwAfter?: boolean } = {}): Fake {
   const calls: string[] = [];
+  let active = false;
   return {
     calls,
     stream() {
+      // Mirrors the SDK: a second stream() while one is still registered throws.
+      if (active) throw new Error('ConcurrentStreamError');
+      active = true;
       return (async function* () {
-        for (const e of events) yield e;
-        if (opts.throwAfter) throw new Error('boom');
-        if (opts.hang) await new Promise<never>(() => undefined);
+        try {
+          for (const e of events) yield e;
+          if (opts.throwAfter) throw new Error('boom');
+          if (opts.hang) await new Promise<never>(() => undefined);
+        } finally {
+          active = false;
+        }
       })();
     },
     async interrupt() {
@@ -133,6 +141,7 @@ test('ApplyPatch bodies naming outside paths are denied', async () => {
     const r = await runTurn(s, 'go', { turnId: 't1', guard, emit });
     assert.equal(r.outcome, 'aborted', key);
     assert.equal((droid(events)[0]!.payload as { reason: string }).reason, 'outside-workspace');
+    assert.deepEqual(s.calls, ['interrupt', 'close'], key);
   }
   const ok = fake([call('1', 'ApplyPatch', { patch: '*** Add File: notes/a.md\n+x' }), result('success')]);
   assert.equal((await runTurn(ok, 'go', { turnId: 't', guard, emit: () => undefined })).outcome, 'success');
@@ -172,11 +181,45 @@ test('a stream that throws gives outcome error and does not throw', async () => 
 
 test('close errors after an abort are swallowed', async () => {
   const s = fake([call('1', 'Execute', {}), result('interrupted')]);
+  let closeCalled = false;
   s.close = async () => {
+    closeCalled = true;
     throw new Error('x');
   };
   const r = await runTurn(s, 'go', { turnId: 't', guard, emit: () => undefined });
   assert.equal(r.outcome, 'aborted');
+  assert.deepEqual(s.calls, ['interrupt']); // overridden close threw; interrupt was still recorded
+  assert.equal(closeCalled, true);
+});
+
+test('Edit outside the workspace is denied by the watchdog (no write exemption)', async () => {
+  const s = fake([call('1', 'Edit', { file_path: '../x' }), result('interrupted')]);
+  const { events, emit } = collect();
+  const r = await runTurn(s, 'go', { turnId: 't1', guard, emit });
+  assert.equal(r.outcome, 'aborted');
+  assert.deepEqual(s.calls, ['interrupt', 'close']);
+  assert.equal((droid(events)[0]!.payload as { reason: string }).reason, 'outside-workspace');
+});
+
+test('string-input ApplyPatch: outside path or no extractable path is denied', async () => {
+  for (const input of ['*** Add File: ../z\n+x', 'garbage with no headers']) {
+    const s = fake([call('1', 'ApplyPatch', input), result('interrupted')]);
+    const { events, emit } = collect();
+    const r = await runTurn(s, 'go', { turnId: 't1', guard, emit });
+    assert.equal(r.outcome, 'aborted', input);
+    assert.equal((droid(events)[0]!.payload as { reason: string }).reason, 'outside-workspace');
+  }
+  const ok = fake([call('1', 'ApplyPatch', '*** Add File: notes/a.md\n+x'), result('success')]);
+  assert.equal((await runTurn(ok, 'go', { turnId: 't', guard, emit: () => undefined })).outcome, 'success');
+});
+
+test('a normal Result releases the stream so the same session can run Phase 2', async () => {
+  const s = fake([result('success')]);
+  const a = await runTurn(s, 'p1', { turnId: 't', guard, emit: () => undefined });
+  const b = await runTurn(s, 'p2', { turnId: 't', guard, emit: () => undefined });
+  assert.equal(a.outcome, 'success');
+  assert.equal(b.outcome, 'success');
+  assert.deepEqual(s.calls, []);
 });
 
 // ---- permission handler ----

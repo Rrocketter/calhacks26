@@ -139,6 +139,11 @@ export async function runTurn(
         calls.set(ev.toolUseId, ev.name);
         const input = (ev.input ?? {}) as Record<string, unknown>;
         let denial = guard.checkToolCall(ev.name, input);
+        if (denial === null && ev.name === 'ApplyPatch' && typeof ev.input === 'string') {
+          const named = patchPaths(ev.input);
+          const bad = named.find((p) => !guard.inside(p));
+          if (named.length === 0 || bad !== undefined) denial = { reason: 'outside-workspace', path: bad ?? null };
+        }
         if (denial === null && ev.name === 'ApplyPatch') {
           const bad = [...patchPaths(input.patch), ...patchPaths(input.input)].find((p) => !guard.inside(p));
           if (bad !== undefined) denial = { reason: 'outside-workspace', path: bad };
@@ -173,6 +178,9 @@ export async function runTurn(
       } else if (ev.type === DroidMessageType.Result) {
         if (!aborted) outcome = outcomeFor(ev.subtype);
         console.log(`[droid] done ${ev.subtype} ${since()}`);
+        // Release the SDK stream bridge (no next() is pending here). A bare break leaves the
+        // generator suspended, and the next stream() on this session throws ConcurrentStreamError.
+        if (!aborted) await it.return?.(undefined);
         break;
       }
     }
@@ -183,6 +191,8 @@ export async function runTurn(
   }
   if (aborted) {
     // Not awaited: on a generator parked at a pending next(), return() only settles once that next() does.
+    // close() releases the bridge and settles the parked next(); awaiting return() first would deadlock
+    // the grace-timeout path.
     void it?.return?.(undefined)?.catch(() => undefined);
     await session.close().catch(() => undefined);
     console.log(`[droid] watchdog: session closed ${since()}`);
