@@ -590,6 +590,55 @@ mark {
   animation: blink 1s steps(1) infinite;
 }
 
+/* Ghost prediction: the belief's guess at what comes next. Italic, dim, tagged, never mistaken for speech. */
+.ghost {
+  --ghost: 0;
+  margin-left: 0.4em;
+  font-style: italic;
+  font-weight: 400;
+  color: var(--faint);
+  opacity: calc(var(--ghost) * 0.85);
+  transition: opacity 400ms var(--ease);
+}
+
+.ghost-tag {
+  display: inline-block;
+  margin-right: 0.55em;
+  padding: 1px 6px;
+  vertical-align: 0.35em;
+  font-family: var(--mono);
+  font-size: 13px;
+  font-style: normal;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dim);
+  border: 1px dashed color-mix(in oklab, var(--dim) 70%, transparent);
+  border-radius: 3px;
+}
+
+.ghost-lead {
+  white-space: nowrap;
+}
+
+.ghost-part {
+  border-bottom: 1px dotted color-mix(in oklab, var(--faint) 60%, transparent);
+  animation: ghost-in 420ms var(--ease) both;
+}
+
+.ghost-sep {
+  margin: 0 0.35em;
+  font-style: normal;
+  color: color-mix(in oklab, var(--state) 70%, var(--faint));
+}
+
+@keyframes ghost-in {
+  from {
+    opacity: 0;
+    filter: blur(4px);
+  }
+}
+
 /* The interjection, spliced into the sentence where it cut in, pointing up at the word */
 .callout {
   --x: 28px;

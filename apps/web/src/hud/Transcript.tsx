@@ -1,5 +1,7 @@
-import { Fragment, useEffect, useLayoutEffect, useRef, type ReactNode } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import type { Belief } from '@ahead/contracts';
 import { words, type HudState } from './state';
+import { ghostOpacity, ghostParts } from './ghost';
 
 // Keyed by index and text, so new words and Ink's rewrites ("two" → "2") animate in, the rest stay put.
 function Words({ text, highlight, callout }: { text: string; highlight: number | null; callout?: ReactNode }) {
@@ -50,6 +52,44 @@ function Callout({ text }: { text: string }) {
   );
 }
 
+// Dim guess at the rest of the sentence from the belief; each segment re-animates when it changes.
+function Ghost({ belief }: { belief: Belief }) {
+  const parts = ghostParts(belief);
+  if (!parts) return null;
+  return (
+    <span className="ghost" style={{ '--ghost': ghostOpacity(belief.confidence) } as CSSProperties} aria-hidden>
+      {parts.map((p, i) => {
+        // The tag stays glued to the first word so it never ends a line on its own.
+        const cut = i === 0 ? p.indexOf(' ') : -1;
+        const lead = cut < 0 ? p : p.slice(0, cut);
+        return (
+          <Fragment key={`${i}:${p}`}>
+            {i > 0 && <span className="ghost-sep">▸</span>}
+            <span className="ghost-part">
+              {i === 0 ? (
+                <span className="ghost-lead">
+                  <span className="ghost-tag">predicting</span>
+                  {lead}
+                </span>
+              ) : (
+                p
+              )}
+              {cut >= 0 && p.slice(cut)}
+            </span>
+          </Fragment>
+        );
+      })}
+    </span>
+  );
+}
+
+// The reducer keeps the last belief across turns; only one that arrived during this turn counts.
+function useTurnBelief(turnId: string | null, belief: Belief | null): Belief | null {
+  const [seen, setSeen] = useState({ turnId, stale: belief });
+  if (seen.turnId !== turnId) setSeen({ turnId, stale: belief });
+  return seen.turnId === turnId && belief !== seen.stale ? belief : null;
+}
+
 export function Transcript({ hud, error }: { hud: HudState; error: string | null }) {
   const { turnId, partial, finals, interject, eagerEnd } = hud;
   const open = turnId !== null && !finals.some((f) => f.turnId === turnId);
@@ -59,6 +99,7 @@ export function Transcript({ hud, error }: { hud: HudState; error: string | null
   const older = current ? finals.slice(0, -1) : finals;
   const highlight = interject && interject.turnId === turnId ? interject.wordIndex : null;
   const callout = interject && <Callout key={`${interject.turnId}-${interject.text}`} text={interject.text} />;
+  const belief = useTurnBelief(turnId, hud.belief);
   return (
     <section className="panel transcript" aria-live="polite">
       {error && (
@@ -86,6 +127,7 @@ export function Transcript({ hud, error }: { hud: HudState; error: string | null
         <div className="partial">
           <Words text={partial} highlight={highlight} callout={callout} />
           <span className="caret" />
+          {belief && partial !== '' && <Ghost belief={belief} />}
         </div>
       ) : current ? (
         <div className="partial">
