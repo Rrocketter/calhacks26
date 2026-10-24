@@ -502,3 +502,20 @@ All times are from the fixture's `turn_start`. `merge done` runs from STAGED to 
 - **Sonic slow first chunk is not a reconnect:** every slow first chunk (555, 813, 1054, 1254 ms) came on an already-open socket, 13 to 20 s after its last use, with no `[sonic] connect` in between. So no keepalive or reconnect was added. The cause is still unknown.
 
 **Fix-wave re-run (2026-10-24, clean workspace, spoken confirms):** utterance 1 lock 2281, interject 3020, first droid_event 6043, STAGED 14792, merge done +2250, PASS (draft says Friday, no sign-off). Utterance 2 lock 2267, first droid_event 5734, STAGED 19088, merge done +2629, PASS (`2026-10-26T09:00-07:00`). The spoken yes acted 2 ms after its first partial, about 150 ms before `turn_end`. Live `smoke:voice` PASS; interject TTFA 93.5 ms, unanswered correction released at 4 s.
+
+### Spoken-confirm trials (2026-10-24)
+
+`DEMO_MODE=1 DEMO_LIVE_INK=1` keeps real Ink on in DEMO_MODE: fixtures drive the utterance, the mic goes to Ink. `scripts/confirm-trials.ts --wav=yes.wav --delay=N` plays demo-utterance-2 to "Apply?", streams silence frames like a live mic, and splices a 0.48 s "yes" (macOS `say`, Samantha, 16 kHz) in N ms after the prompt audio ends, estimated the way the server's playback clock does. Hit = COMMITTED within 8 s of the yes.
+
+| Tail | Delay | Hits | Notes |
+| --- | --- | --- | --- |
+| 300 ms | 400 ms | 10/10 | first frame forwarded 7 to 84 ms after mute end; first Ink update 1.2 to 2.2 s after the yes started |
+| 300 ms | 0 ms | 0/5 | no Ink update and no turn at all: the mute dropped the first ~300 ms of the word |
+| 100 ms | 400 ms | 10/10 | |
+| 100 ms | 0 ms | 5/5 | first update 1.0 to 2.8 s after the yes started |
+
+- Dominant failure mode: a quick "yes" that starts inside the mute tail loses its first syllable and Ink emits nothing (no `turn.update`, no `turn.end`). No trial showed a `turn.end` with no update.
+- Fix applied: `PLAYBACK_TAIL_MS` 300 to 100. The browser mic runs with `echoCancellation: true`. Not yet checked on speakers at the mic for self-transcription.
+- Ink needs 1.0 to 2.8 s from the start of a one-word "yes" to its first update, so a spoken confirm lands about 1.5 s after the user speaks. The confirm card's Y / Enter is instant.
+- Diagnostics in the server log: `[voice] dropped N mic frames; first frame forwarded +Xms after mute end`, `[voice] first update <turn> +Xms after mute end "<text>"`, `[voice] turn.end with no update <turn>`.
+
