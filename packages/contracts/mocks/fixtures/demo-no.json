@@ -1,0 +1,19 @@
+{
+  "turnId": "demo-no",
+  "partials": [
+    {
+      "atMs": 600,
+      "text": "No."
+    },
+    {
+      "atMs": 600,
+      "text": "No.",
+      "eager": true
+    },
+    {
+      "atMs": 750,
+      "text": "No.",
+      "final": true
+    }
+  ]
+}

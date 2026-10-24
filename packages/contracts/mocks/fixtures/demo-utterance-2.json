@@ -1,0 +1,51 @@
+{
+  "turnId": "demo-2",
+  "partials": [
+    {
+      "atMs": 1000,
+      "text": "Move"
+    },
+    {
+      "atMs": 1250,
+      "text": "Move my"
+    },
+    {
+      "atMs": 1500,
+      "text": "Move my Friday"
+    },
+    {
+      "atMs": 1750,
+      "text": "Move my Friday meeting"
+    },
+    {
+      "atMs": 2000,
+      "text": "Move my Friday meeting with"
+    },
+    {
+      "atMs": 2250,
+      "text": "Move my Friday meeting with Priya"
+    },
+    {
+      "atMs": 2500,
+      "text": "Move my Friday meeting with Priya to"
+    },
+    {
+      "atMs": 2750,
+      "text": "Move my Friday meeting with Priya to Monday"
+    },
+    {
+      "atMs": 3000,
+      "text": "Move my Friday meeting with Priya to Monday morning."
+    },
+    {
+      "atMs": 3000,
+      "text": "Move my Friday meeting with Priya to Monday morning.",
+      "eager": true
+    },
+    {
+      "atMs": 3150,
+      "text": "Move my Friday meeting with Priya to Monday morning.",
+      "final": true
+    }
+  ]
+}

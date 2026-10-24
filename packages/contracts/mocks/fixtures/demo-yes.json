@@ -1,0 +1,19 @@
+{
+  "turnId": "demo-yes",
+  "partials": [
+    {
+      "atMs": 600,
+      "text": "Yes."
+    },
+    {
+      "atMs": 600,
+      "text": "Yes.",
+      "eager": true
+    },
+    {
+      "atMs": 750,
+      "text": "Yes.",
+      "final": true
+    }
+  ]
+}

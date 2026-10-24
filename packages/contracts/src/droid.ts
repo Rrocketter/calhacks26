@@ -10,7 +10,12 @@ export type DroidToolPayload = { tool: string; path?: string; denied?: boolean; 
 /** kind 'diff'. `diff` is unified (`git diff main..spec/<turnId>`), `file` is workspace-relative. */
 export type DroidDiffPayload = { file: string; diff: string };
 /** kind 'result'. */
-export type DroidResultPayload = { ok: boolean; summary: string };
+export type DroidResultPayload = {
+  ok: boolean;
+  summary: string;
+  /** true when the Droid turn failed after STAGED; the staged diff can still be applied. */
+  failed?: boolean;
+};
 
 export type DroidPayloadByKind = {
   plan: DroidPlanPayload;
