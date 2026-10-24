@@ -35,6 +35,13 @@ export const ServerEventSchema = z.discriminatedUnion('type', [
     text: z.string(),
     ts: z.number(),
   }),
+  z.object({
+    type: z.literal('turn_eager_end'),
+    turnId: z.string(),
+    text: z.string(),
+    ts: z.number(),
+  }),
+  z.object({ type: z.literal('turn_resume'), turnId: z.string(), ts: z.number() }),
   z.object({ type: z.literal('turn_end'), turnId: z.string(), ts: z.number() }),
   z.object({ type: z.literal('belief_update'), turnId: z.string(), belief: BeliefSchema }),
   z.object({

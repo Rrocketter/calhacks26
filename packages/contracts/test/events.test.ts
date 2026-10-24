@@ -6,6 +6,15 @@ describe('parseServerEvent', () => {
     const ev = { type: 'state_change', turnId: 't1', state: 'STAGED' };
     expect(parseServerEvent(JSON.stringify(ev))).toEqual(ev);
   });
+  it('accepts turn_eager_end and turn_resume, rejects turn_eager_end without text', () => {
+    const eager = { type: 'turn_eager_end', turnId: 't1', text: 'draft 2 pm', ts: 5 };
+    const resume = { type: 'turn_resume', turnId: 't1', ts: 6 };
+    expect(parseServerEvent(JSON.stringify(eager))).toEqual(eager);
+    expect(parseServerEvent(JSON.stringify(resume))).toEqual(resume);
+    expect(
+      parseServerEvent(JSON.stringify({ type: 'turn_eager_end', turnId: 't1', ts: 5 })),
+    ).toBeNull();
+  });
   it('rejects unknown type, bad json, bad state', () => {
     expect(parseServerEvent('{"type":"nope"}')).toBeNull();
     expect(parseServerEvent('not json')).toBeNull();
