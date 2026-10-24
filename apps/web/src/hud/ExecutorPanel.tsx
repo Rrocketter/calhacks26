@@ -32,6 +32,9 @@ export function ExecutorPanel({ hud, canSend, onConfirm }: Props) {
   const rolledBack = !prior && hud.state === 'ROLLED_BACK';
   const canConfirm = canSend && !prior && (hud.state === 'SPECULATING' || hud.state === 'STAGED');
   const stale = result?.failed === true;
+  // Only a live, unfinished run has tool calls still in flight; an aborted one's pending calls never resolve.
+  const running = !prior && !result && (hud.state === 'SPECULATING' || hud.state === 'STAGED');
+  const ended = hud.state === 'COMMITTED' || hud.state === 'ROLLED_BACK';
   const mark =
     stale && result ? { tag: 'STALE', note: result.summary } : rolledBack ? { tag: 'ROLLED BACK' } : null;
   return (
@@ -42,7 +45,7 @@ export function ExecutorPanel({ hud, canSend, onConfirm }: Props) {
         </span>
         {prior && <span className="tag dim">PREVIOUS TURN</span>}
         {/* Same name the server's executor/git.ts gives the branch */}
-        {hud.droidTurnId && <span className="ms num branch">spec/{hud.droidTurnId.replace(/[^A-Za-z0-9._-]/g, '-')}</span>}
+        {hud.droidTurnId && <span className={ended || prior ? 'ms num branch gone' : 'ms num branch'}>spec/{hud.droidTurnId.replace(/[^A-Za-z0-9._-]/g, '-')}</span>}
       </div>
       <Stepper hud={hud} />
       {idle ? (
@@ -65,8 +68,8 @@ export function ExecutorPanel({ hud, canSend, onConfirm }: Props) {
                     {r.denied ? (
                       <span className="tag bad">DENIED</span>
                     ) : (
-                      <span className={r.status === 'pending' ? 'check spin' : 'check'}>
-                        {r.status === 'ok' ? '✓' : r.status === 'error' ? '✕' : ''}
+                      <span className={r.status === 'pending' && running ? 'check spin' : 'check'}>
+                        {r.status === 'ok' ? '✓' : r.status === 'error' ? '✕' : running ? '' : '○'}
                       </span>
                     )}
                     <span className="tool-name">{r.tool}</span>

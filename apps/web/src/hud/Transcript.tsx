@@ -1,4 +1,4 @@
-import { Fragment, useLayoutEffect, useRef, type ReactNode } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useRef, type ReactNode } from 'react';
 import { words, type HudState } from './state';
 
 // Keyed by index and text, so new words and Ink's rewrites ("two" → "2") animate in, the rest stay put.
@@ -22,16 +22,23 @@ function Words({ text, highlight, callout }: { text: string; highlight: number |
 // The interjection, inserted into the sentence right where the agent cut in, pointing at the word.
 function Callout({ text }: { text: string }) {
   const box = useRef<HTMLSpanElement>(null);
-  useLayoutEffect(() => {
+  const place = () => {
     const el = box.current;
-    const word = el?.previousElementSibling?.querySelector('mark');
     if (!el) return;
+    const word = el.previousElementSibling?.querySelector('mark');
     if (!(word instanceof HTMLElement)) {
       el.style.removeProperty('--x');
       return;
     }
     el.style.setProperty('--x', `${Math.max(14, word.offsetLeft + word.offsetWidth / 2 - el.offsetLeft)}px`);
-  });
+  };
+  useLayoutEffect(place);
+  // Re-aim after a resize or the web font swapping in, with no new transcript events.
+  useEffect(() => {
+    addEventListener('resize', place);
+    void document.fonts?.ready.then(place);
+    return () => removeEventListener('resize', place);
+  }, []);
   return (
     <span className="callout" ref={box}>
       <span className="label">
