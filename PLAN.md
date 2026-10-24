@@ -25,7 +25,7 @@ Every voice assistant waits for you to stop talking, then thinks. AHEAD retrieve
 | Moss | Moss used meaningfully; voice agent / personal agent that remembers you | Moss is queried on every partial transcript. Latency HUD shows per-query ms. Project collapses without it. |
 | Moss Social Post | Post with engagement | Post a 20 to 30 s clip of the interjection moment with the latency HUD visible, tag @usemoss |
 | Cartesia | Voice core to product, 2-min demo-first pitch, README with setup + features used + limitations, no keys in repo, accessibility/privacy/responsible-use addressed | Ink 2 streaming STT + turn detection, Sonic 3.5 TTS with barge-in. README sections written. Privacy: corpus is local, nothing leaves except STT/TTS audio. |
-| Factory Droid SDK | Droid does real work in the running product, runs on a designed trigger, scoped permissions with safety, visible plans/steps/diffs/results, README explains where Droid is used, no chatbot wrapper, no slides-only demo | Droid dispatched when belief confidence crosses threshold. Permission handler allows writes only under `var/workspace/`, denies Execute and network. All Droid tool events stream to the UI. Staged work lives on a git branch and is committed or discarded. |
+| Factory Droid SDK | Droid does real work in the running product, runs on a designed trigger, scoped permissions with safety, visible plans/steps/diffs/results, README explains where Droid is used, no chatbot wrapper, no slides-only demo | Droid dispatched when belief confidence crosses threshold. Permission handler allows writes only under `~/.ahead/workspace/`, denies Execute and network. All Droid tool events stream to the UI. Staged work lives on a git branch and is committed or discarded. |
 | Most Technically Complex (stretch) | Judges see real engineering | Speculation + cancellation + rollback + sub-100 ms loop |
 
 ## 4. How it works (system design)
@@ -45,8 +45,8 @@ Mic ──► Cartesia Ink 2 (streaming STT, partials + turn events)
                                                               │
                                                               ▼
                                                     Droid session (Factory SDK)
-                                                    cwd = var/workspace/ on branch spec/<id>
-                                                    permission handler: fs under var/workspace/ only
+                                                    cwd = ~/.ahead/workspace/ on branch spec/<id>
+                                                    permission handler: fs under ~/.ahead/workspace/ only
                                                     events → UI (plan, steps, diffs)
                                                               │
    Ink turn_end ──► Finalize: confirm belief against final transcript (1 Haiku call)
@@ -60,7 +60,7 @@ Mic ──► Cartesia Ink 2 (streaming STT, partials + turn events)
 - `apps/server` Node + TS. Holds Moss runtime, belief tracker, Droid executor, Cartesia proxies. Single process.
 - `packages/contracts` Shared TS types and the WebSocket event schema. Written FIRST. Every lane codes against it with mocks.
 - `workspace-seed/` Tracked seed files that stand in for "your life": `calendar.json`, `contacts.json`, `notes/*.md`, `messages/outbox/*.md`, `files/*`.
-- `var/workspace/` Gitignored runtime copy of the seed with its own `git init`, created by `pnpm reset:workspace`. Droid edits these. Diffs are real and visible. Never nest a git repo inside the main repo.
+- `~/.ahead/workspace/` (override `AHEAD_WORKSPACE`) Runtime copy of the seed, outside the repo, with its own `git init`, created by `pnpm reset:workspace`. Droid edits these. Diffs are real and visible. Never nest a git repo inside the main repo.
 - `data/corpus/` Generated synthetic personal corpus (300 to 500 docs) indexed into Moss with metadata (type, date, people).
 
 ### Action set (exactly five, do not add more)
@@ -84,7 +84,7 @@ type Belief = {
 
 ### Speculation rules
 - Fire Droid at most once per turn. If belief intent changes after dispatch, abort and discard.
-- Droid may only touch `var/workspace/`. Execute tool disabled. No network.
+- Droid may only touch `~/.ahead/workspace/`. Execute tool disabled. No network.
 - Every speculation runs on branch `spec/<turnId>`. COMMIT = fast-forward merge to main. ROLLBACK = branch delete.
 - Visible state machine in UI: LISTENING → BELIEF_FORMING → SPECULATING → STAGED → (COMMITTED | ROLLED_BACK)
 

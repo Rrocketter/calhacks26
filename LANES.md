@@ -15,8 +15,8 @@ Deliverables
    - s2c: `transcript_partial {turnId,text,ts}`, `transcript_final`, `turn_start`, `turn_end`, `belief_update {turnId, belief:Belief}`, `moss_hits {turnId, hits, latencyMs}`, `state_change {turnId, state}`, `droid_event {turnId, kind:'plan'|'step'|'tool'|'diff'|'result', payload}`, `interject {turnId, text}`, `tts_audio_chunk`, `error`
 3. `packages/contracts/src/belief.ts`: the `Belief` type from PLAN.md, the `Intent` enum, the `State` enum.
 4. `packages/contracts/mocks/`: a mock Ink partial stream (reads a JSON fixture of timed partials), a mock Moss (returns canned hits), a mock Droid (emits a fake plan + 3 steps + a diff over 2 s). Each lane uses the others' mocks.
-5. `workspace-seed/` with `calendar.json`, `contacts.json`, `notes/`, `messages/outbox/`, `files/` containing the demo facts from PLAN.md section 5. Plus `pnpm reset:workspace`, which deletes `var/workspace/`, copies the seed in, runs `git init`, and makes an initial commit on `main` inside it. `var/` is gitignored. Do NOT `git init` anywhere else.
-6. Spikes, each as a tiny script in `apps/server/scripts/spike-*.ts` that proves the key works and prints latency: `spike-ink.ts` (stream a wav, print partials with timestamps), `spike-sonic.ts` (synthesize one line, save wav), `spike-moss.ts` (index 10 docs, query, print ms), `spike-droid.ts` (one-shot run that writes a file under var/workspace/ with a permission handler that denies everything outside it). Write findings to `docs/sdk-notes.md`.
+5. `workspace-seed/` with `calendar.json`, `contacts.json`, `notes/`, `messages/outbox/`, `files/` containing the demo facts from PLAN.md section 5. Plus `pnpm reset:workspace`, which deletes `~/.ahead/workspace/`, copies the seed in, runs `git init`, and makes an initial commit on `main` inside it. Do NOT `git init` anywhere else.
+6. Spikes, each as a tiny script in `apps/server/scripts/spike-*.ts` that proves the key works and prints latency: `spike-ink.ts` (stream a wav, print partials with timestamps), `spike-sonic.ts` (synthesize one line, save wav), `spike-moss.ts` (index 10 docs, query, print ms), `spike-droid.ts` (one-shot run that writes a file under ~/.ahead/workspace/ with a permission handler that denies everything outside it). Write findings to `docs/sdk-notes.md`.
 
 Do not build features. Stop when all four spikes pass.
 
@@ -63,9 +63,9 @@ Goal: a `Speculator` that turns a belief into staged, reversible, visible work v
 
 Deliverables
 1. `DroidExecutor` using `@factory/droid-sdk`:
-   - `prepare(turnId)`: `git checkout -b spec/<turnId>` inside `var/workspace/`, create a Droid session with `cwd=var/workspace/`.
+   - `prepare(turnId)`: `git checkout -b spec/<turnId>` inside `~/.ahead/workspace/`, create a Droid session with `cwd=~/.ahead/workspace/`.
    - `speculate(turnId, belief)`: build a prompt from an action template (`reschedule_event`, `draft_message`, `add_note`, `find_file`) and run it. Stream every SDK event (plan text, tool use, tool result) to the WS as `droid_event`. After completion, compute `git diff main..spec/<turnId>` and emit as `droid_event kind:'diff'`.
-   - Permission handler: allow read/write/edit only for paths under `var/workspace/`; deny Execute, network, and anything else. Deny must be logged and surfaced to UI as a `droid_event kind:'tool'` with `denied:true` so judges see the safety layer working.
+   - Permission handler: allow read/write/edit only for paths under `~/.ahead/workspace/`; deny Execute, network, and anything else. Deny must be logged and surfaced to UI as a `droid_event kind:'tool'` with `denied:true` so judges see the safety layer working.
    - `commit(turnId)`: fast-forward merge to main, emit `state_change COMMITTED`.
    - `rollback(turnId)`: `session.abort()`, checkout main, delete branch, emit `state_change ROLLED_BACK`.
    - Hard rule: at most one live speculation per turn. A new `speculate` for the same turn must rollback first.
@@ -73,7 +73,7 @@ Deliverables
 3. Action templates in `apps/server/src/actions/*.md`. Each is explicit about which file to edit and must end with "Do not run commands. Do not touch files outside this workspace."
 4. Test with the mock belief stream from contracts.
 
-Done when: a mock belief for `reschedule_event` produces a real edit to `var/workspace/calendar.json` on a branch, the diff appears in the event stream within ~5 s, and both commit and rollback leave `var/workspace/` in a clean state. Record Droid cold-start and typical task latency in `docs/sdk-notes.md`.
+Done when: a mock belief for `reschedule_event` produces a real edit to `~/.ahead/workspace/calendar.json` on a branch, the diff appears in the event stream within ~5 s, and both commit and rollback leave `~/.ahead/workspace/` in a clean state. Record Droid cold-start and typical task latency in `docs/sdk-notes.md`.
 
 ---
 

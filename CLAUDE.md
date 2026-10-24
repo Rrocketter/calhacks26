@@ -7,7 +7,7 @@ Read PLAN.md first. It is the source of truth for scope, action set, state machi
 - `apps/server` Node 20, TypeScript, single process. Moss runtime, belief tracker, Droid executor, Cartesia proxies.
 - `apps/web` Vite + React + TypeScript. Mic, playback, HUD.
 - `workspace-seed/` tracked seed files for the fake user's life (calendar, contacts, notes, outbox, files).
-- `var/workspace/` gitignored runtime copy with its own git repo, made by `pnpm reset:workspace`. Droid edits only here. Never `git init` anywhere inside the main repo except `var/workspace/`.
+- `~/.ahead/workspace/` (override `AHEAD_WORKSPACE`) runtime copy with its own git repo, made by `pnpm reset:workspace`. Droid edits only here. Never `git init` inside the main repo. The only nested repo is the runtime workspace at ~/.ahead/workspace (AHEAD_WORKSPACE). It lives outside the repo because Droid's Read tools bypass the permission handler, so the workspace must not be able to reach the repo's .env.
 - Never commit API keys anywhere.
 - `data/corpus/` generated synthetic personal corpus. Generator script lives in `apps/server/scripts/gen-corpus.ts`.
 - `docs/` lane briefs and README drafts.

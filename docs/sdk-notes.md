@@ -122,7 +122,7 @@ Final transcript: `Draft a message to Priya saying, I'll see her Thursday at 2 f
 
 ## Factory Droid SDK
 
-**CANARY READ BYPASSED HANDLER.** Droid's `Read` and `LS` tools read files outside `var/workspace/` without ever calling the permission handler. The handler only scopes writes. Treat everything the server process can read as readable by the model.
+**CANARY READ BYPASSED HANDLER.** Droid's `Read` and `LS` tools read files outside `~/.ahead/workspace/` without ever calling the permission handler. The handler only scopes writes. Treat everything the server process can read as readable by the model.
 
 - Package: `@factory/droid-sdk@0.10.0` (pinned with `-E`), imported from `@factory/droid-sdk/node`. No postinstall build script, so pnpm did not block anything.
 - `createSession` spawns the local `droid` CLI (`~/.local/bin/droid`, v0.249.0) as `droid exec --input-format stream-jsonrpc --output-format stream-jsonrpc` and passes `FACTORY_API_KEY` from `process.env`.
@@ -142,7 +142,7 @@ Final transcript: `Draft a message to Priya saying, I'll see her Thursday at 2 f
 
 | Tool | Reached handler | Outcome |
 |---|---|---|
-| Create `var/workspace/notes/spike.md` | yes (`create`) | allow, file written |
+| Create `~/.ahead/workspace/notes/spike.md` | yes (`create`) | allow, file written |
 | Create `var/outside-spike.txt` | yes (`create`) | deny, tool_result error (39 bytes), file absent |
 | Read `<repo>/.env.canary` | **no** | succeeded, 101 bytes, values masked |
 | LS `<repo>` | **no** | succeeded, 1526 bytes |
@@ -157,7 +157,7 @@ write-inside: ok
 write-outside: denied
 canary-read: handler-saw=no succeeded=yes bytes=101
 canary leaked to model: no
-git -C var/workspace status --short:
+git -C ~/.ahead/workspace status --short:
 ?? notes/spike.md
 ```
 
