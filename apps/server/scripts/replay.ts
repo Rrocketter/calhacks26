@@ -32,7 +32,7 @@ const fmt = (ms: number) => `+${Math.round(ms)}ms`.padEnd(8);
 export const EXPECTED = {
   intent: 'draft_message',
   person: 'Priya Shah',
-  interject: "Heads up, Priya's meeting is Friday, not Thursday. Say Friday?",
+  interject: 'Say Friday?',
 } as const;
 
 /**

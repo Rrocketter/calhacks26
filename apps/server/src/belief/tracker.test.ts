@@ -417,7 +417,7 @@ const MARCUS_EVT = hit(
   { type: 'calendar', people: 'Marcus Lee', day: 'friday', time: '10 am', title: 'Sync' },
   'Sync with Marcus Lee, Friday 10 am',
 );
-const DEMO_TEXT = "Heads up, Priya's meeting is Friday, not Thursday. Say Friday?";
+const DEMO_TEXT = 'Say Friday?';
 const LOCKED_DRAFT = {
   intent: 'draft_message' as const,
   entities: { person: 'Priya' },

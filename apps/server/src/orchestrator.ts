@@ -7,7 +7,6 @@ import {
   claimForInterject,
   correctBelief,
   correctionAck,
-  mayBeConfirm,
   parseConfirm,
   stagedLine,
   type Answerer,
@@ -42,10 +41,16 @@ export type OrchestratorDeps = {
   answerer: Answerer;
   demo: DemoPort | null; // null = live mic
   today?: () => Date;
-  correctionTimeoutMs?: number; // default 8000
+  correctionTimeoutMs?: number; // default CORRECTION_TIMEOUT_MS
+  confirmWindowMs?: number; // default CONFIRM_WINDOW_MS
 };
 
-export const CORRECTION_TIMEOUT_MS = 8000;
+/** How long an unanswered interject holds the turn's Droid Phase 2. */
+export const CORRECTION_TIMEOUT_MS = 4000;
+/** How long "Apply?" listens for a spoken yes/no. */
+export const CONFIRM_WINDOW_MS = 6000;
+/** metric label the HUD reads as "Listening for yes / no": ms > 0 opens the window, 0 closes it. */
+export const CONFIRM_WINDOW_LABEL = 'confirm_window';
 const DEFAULT_FIXTURE = 'demo-utterance-1';
 
 type Awaiting = { kind: 'correction'; turnId: string; claim: Claim } | { kind: 'apply'; turnId: string } | null;
@@ -61,6 +66,7 @@ export class Orchestrator {
   private readonly d: OrchestratorDeps;
   private readonly today: () => Date;
   private readonly correctionTimeoutMs: number;
+  private readonly confirmWindowMs: number;
   private closed = false;
 
   private openTurn: string | null = null;
@@ -69,6 +75,8 @@ export class Orchestrator {
   /** Turns whose turn_start went to toSpec; spec-bound events of any other turn are dropped. */
   private readonly started = new Set<string>();
   private readonly lastPartial = new Map<string, string>();
+  /** Turns that have shown non-empty text: only a turn's first text can be a spoken confirm. */
+  private readonly spoke = new Set<string>();
   private readonly lastBelief = new Map<string, Belief>();
   private readonly specState = new Map<string, State>();
   private lastSpecTurn: string | null = null;
@@ -88,12 +96,13 @@ export class Orchestrator {
 
   private deferred: Deferred | null = null;
   private readonly corrected = new Map<string, Claim>();
-  private correctionTimer: ReturnType<typeof setTimeout> | null = null;
+  private windowTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(deps: OrchestratorDeps) {
     this.d = deps;
     this.today = deps.today ?? (() => new Date());
     this.correctionTimeoutMs = deps.correctionTimeoutMs ?? CORRECTION_TIMEOUT_MS;
+    this.confirmWindowMs = deps.confirmWindowMs ?? CONFIRM_WINDOW_MS;
   }
 
   /** VoiceSession `send`. */
@@ -111,7 +120,6 @@ export class Orchestrator {
         this.d.send(ev);
         this.speech(ev.turnId, ev.text);
         if (tracker) this.guard(tracker.onUpdate(ev.turnId, ev.text), 'tracker update');
-        if (this.awaiting && this.heldTurn === ev.turnId && !mayBeConfirm(ev.text)) this.release();
         return;
       case 'turn_eager_end':
         this.d.send(ev);
@@ -212,8 +220,8 @@ export class Orchestrator {
   close(): void {
     if (this.closed) return;
     this.closed = true;
-    if (this.correctionTimer) clearTimeout(this.correctionTimer);
-    this.correctionTimer = null;
+    if (this.windowTimer) clearTimeout(this.windowTimer);
+    this.windowTimer = null;
     this.safely(() => this.d.demo?.stop(), 'demo stop');
     this.safely(() => this.d.voice.close(), 'voice close');
     const t = this.lastSpecTurn;
@@ -248,10 +256,15 @@ export class Orchestrator {
     this.d.speculator.onServerEvent(ev);
   }
 
-  /** First real speech of a turn forwards its turn_start (before any hold-release check). */
+  /** First real speech of a turn: a pending confirm decides on it, else it forwards the turn_start. */
   private speech(turnId: string, text: string): void {
+    if (text.trim() === '') return;
+    if (!this.spoke.has(turnId)) {
+      this.spoke.add(turnId);
+      if (this.fastConfirm(turnId, text)) return;
+    }
     const start = this.pendingStart;
-    if (!start || start.turnId !== turnId || text.trim() === '') return;
+    if (!start || start.turnId !== turnId) return;
     this.pendingStart = null;
     this.toSpec(start);
   }
@@ -282,12 +295,61 @@ export class Orchestrator {
     if (tracker) this.guard(tracker.onTurnEnd(old, this.lastPartial.get(old) ?? ''), 'tracker turn end');
   }
 
+  /**
+   * A pending confirm acts on the first text of the next turn: no turn_end, no Haiku, no speech
+   * filter. A yes/no is consumed (never speculates); anything else releases the hold.
+   */
+  private fastConfirm(turnId: string, text: string): boolean {
+    const awaiting = this.awaiting;
+    if (!awaiting || awaiting.turnId === turnId) return false;
+    const apply = parseConfirm(text);
+    if (apply === null) {
+      this.release();
+      return false;
+    }
+    console.log(`[orchestrator] spoken ${apply ? 'yes' : 'no'} for ${awaiting.kind} ${awaiting.turnId} on ${turnId}`);
+    this.confirmTurn = turnId;
+    if (this.pendingStart?.turnId === turnId) this.pendingStart = null;
+    this.held = this.held.filter((ev) => turnOf(ev) !== turnId);
+    if (awaiting.kind === 'correction') {
+      this.resolveCorrection(apply, true);
+    } else {
+      this.spokenConfirm = awaiting.turnId;
+      this.d.speculator.onConfirm(awaiting.turnId, apply);
+    }
+    this.release();
+    return true;
+  }
+
+  /** Open (with its timeout) or close the confirm window; the HUD shows it from the metric. */
+  private setAwaiting(a: Awaiting): void {
+    if (this.windowTimer) clearTimeout(this.windowTimer);
+    this.windowTimer = null;
+    const wasOpen = this.awaiting !== null;
+    this.awaiting = a;
+    if (a) {
+      const ms = a.kind === 'correction' ? this.correctionTimeoutMs : this.confirmWindowMs;
+      this.windowTimer = setTimeout(() => this.onWindowTimeout(a), ms);
+      this.windowTimer.unref?.();
+      this.d.send({ type: 'metric', source: 'ink', label: CONFIRM_WINDOW_LABEL, ms });
+    } else if (wasOpen) {
+      this.d.send({ type: 'metric', source: 'ink', label: CONFIRM_WINDOW_LABEL, ms: 0 });
+    }
+  }
+
+  private onWindowTimeout(a: Awaiting): void {
+    if (this.awaiting !== a) return;
+    this.windowTimer = null;
+    console.log(`[orchestrator] confirm window closed unanswered (${a!.kind} ${a!.turnId})`);
+    this.release();
+  }
+
   /** Flush held events in order and stop awaiting; the speculator's own turn_start rolls back a staged turn. */
   private release(): void {
     if (this.awaiting?.kind === 'correction' && this.deferred?.turnId === this.awaiting.turnId) {
       this.resolveCorrection(false, false);
     }
-    this.awaiting = null;
+    this.setAwaiting(null);
     const held = this.held;
     this.held = [];
     this.heldTurn = null;
@@ -298,31 +360,14 @@ export class Orchestrator {
 
   private turnEnd(turnId: string, finalText: string): void {
     const tracker = this.d.tracker;
-    if (this.awaiting && this.heldTurn === turnId) {
-      const apply = parseConfirm(finalText);
-      if (apply !== null) {
-        const awaiting = this.awaiting;
-        this.held = [];
-        this.heldTurn = null;
-        this.confirmTurn = turnId;
-        if (awaiting.kind === 'correction') {
-          this.resolveCorrection(apply, true);
-        } else {
-          this.awaiting = null;
-          this.spokenConfirm = awaiting.turnId;
-          this.d.speculator.onConfirm(awaiting.turnId, apply);
-        }
-        if (tracker) this.guard(tracker.onTurnEnd(turnId, finalText), 'tracker turn end');
-        return;
-      }
-      this.release();
+    if (turnId === this.confirmTurn) {
+      // Already acted on at its first partial.
+      if (tracker) this.guard(tracker.onTurnEnd(turnId, finalText), 'tracker turn end');
+      return;
     }
     this.ended.add(turnId);
     const correcting = this.deferred?.turnId === turnId;
-    if (correcting) {
-      this.awaiting = { kind: 'correction', turnId, claim: this.deferred!.claim };
-      this.correctionTimer = setTimeout(() => this.onCorrectionTimeout(turnId), this.correctionTimeoutMs);
-    }
+    if (correcting) this.setAwaiting({ kind: 'correction', turnId, claim: this.deferred!.claim });
     this.guard(this.reply(turnId, finalText, correcting), 'reply');
   }
 
@@ -359,8 +404,8 @@ export class Orchestrator {
     if (this.stagedSpoken.has(turnId) || !this.isSpecTurn(turnId)) return;
     this.stagedSpoken.add(turnId);
     const belief = this.lastBelief.get(turnId);
-    this.say(belief ? stagedLine(belief) : "It's ready. Apply?", turnId);
-    this.awaiting = { kind: 'apply', turnId };
+    this.say(belief ? stagedLine(belief) : 'Apply?', turnId);
+    this.setAwaiting({ kind: 'apply', turnId });
   }
 
   // ---- interject correction ----
@@ -378,9 +423,7 @@ export class Orchestrator {
     const d = this.deferred;
     if (!d) return;
     this.deferred = null;
-    if (this.correctionTimer) clearTimeout(this.correctionTimer);
-    this.correctionTimer = null;
-    if (this.awaiting?.kind === 'correction' && this.awaiting.turnId === d.turnId) this.awaiting = null;
+    if (this.awaiting?.kind === 'correction' && this.awaiting.turnId === d.turnId) this.setAwaiting(null);
     if (apply) this.corrected.set(d.turnId, d.claim);
     console.log(`[orchestrator] correction ${d.turnId} ${apply ? 'applied' : 'kept'} (${d.events.length} deferred)`);
     for (const ev of d.events) this.toSpec(ev);
@@ -391,11 +434,6 @@ export class Orchestrator {
       this.d.send({ type: 'belief_update', turnId: d.turnId, belief });
     }
     if (spoken) this.say(correctionAck(apply ? d.claim.known : d.claim.said), d.turnId);
-  }
-
-  private onCorrectionTimeout(turnId: string): void {
-    this.correctionTimer = null;
-    if (this.deferred?.turnId === turnId) this.release();
   }
 
   // ---- helpers ----

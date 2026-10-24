@@ -1,4 +1,5 @@
-export const INTERJECT_TEMPLATE = "Heads up, {person}'s meeting is {known}, not {said}. Say {known}?";
+// Short on purpose: the mic is muted while it plays.
+export const INTERJECT_TEMPLATE = 'Say {known}?';
 
 export const BELIEF_CONFIG = {
   SPECULATE_AT: 0.75,
