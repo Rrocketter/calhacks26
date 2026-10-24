@@ -31,7 +31,11 @@ async function main(): Promise<void> {
   }
   const apiKey = requireEnv('CARTESIA_API_KEY');
 
-  const contactsFile = path.join(REPO_ROOT, 'workspace-seed', 'contacts.json');
+  // IMPORT_GOOGLE=1: real contacts from pnpm import:google replace the seed.
+  const contactsFile =
+    process.env.IMPORT_GOOGLE === '1'
+      ? path.join(REPO_ROOT, 'data', 'google', 'contacts.json')
+      : path.join(REPO_ROOT, 'workspace-seed', 'contacts.json');
   const { contacts } = JSON.parse(readFileSync(contactsFile, 'utf8')) as { contacts: { name: string }[] };
 
   // Warm-up before listening: the first utterance must not pay for cold starts.

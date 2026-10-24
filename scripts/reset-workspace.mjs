@@ -70,6 +70,18 @@ export function canonical(p) {
   return path.join(realpathSync.native(cur), ...rest);
 }
 
+// With IMPORT_GOOGLE=1, real calendar/contacts from pnpm import:google (gitignored
+// data/google/) replace the seed copies in the workspace. Returns the files copied.
+export const GOOGLE_FILES = ['calendar.json', 'contacts.json'];
+export function missingGoogle(repoRoot) {
+  const f = GOOGLE_FILES.find((x) => !existsSync(path.join(repoRoot, 'data', 'google', x)));
+  return f ? `IMPORT_GOOGLE=1 but data/google/${f} is missing; run: pnpm import:google` : null;
+}
+export function overlayGoogle(repoRoot, target) {
+  for (const f of GOOGLE_FILES) cpSync(path.join(repoRoot, 'data', 'google', f), path.join(target, f));
+  return GOOGLE_FILES;
+}
+
 function main() {
   const start = performance.now();
   const repoRoot = canonical(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'));
@@ -78,6 +90,7 @@ function main() {
   const raw = process.env.AHEAD_WORKSPACE ?? readEnvValue(path.join(repoRoot, '.env'), 'AHEAD_WORKSPACE');
   const target = canonical(resolveWorkspace(raw, os.homedir(), repoRoot));
   const seed = path.join(repoRoot, 'workspace-seed');
+  const importGoogle = (process.env.IMPORT_GOOGLE ?? readEnvValue(path.join(repoRoot, '.env'), 'IMPORT_GOOGLE')) === '1';
 
   const refuse = (reason) => {
     console.error(`[workspace] refusing to delete ${target}: ${reason}`);
@@ -95,11 +108,17 @@ function main() {
     reason = `exists but has no ${MARKER} marker`;
   }
   if (reason) refuse(reason);
+  const missing = importGoogle && missingGoogle(repoRoot);
+  if (missing) {
+    console.error(`[workspace] ${missing}`);
+    process.exit(1);
+  }
 
   rmSync(target, { recursive: true, force: true });
   mkdirSync(target, { recursive: true });
   writeFileSync(path.join(target, MARKER), 'created by scripts/reset-workspace.mjs\n');
   cpSync(seed, target, { recursive: true });
+  if (importGoogle) console.log(`[workspace] google overlay: ${overlayGoogle(repoRoot, target).join(', ')}`);
 
   const env = { ...process.env };
   for (const key of Object.keys(env)) if (key.startsWith('GIT_')) delete env[key];

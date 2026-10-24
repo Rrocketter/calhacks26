@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { canonical, checkTarget, readEnvValue, resolveWorkspace } from './reset-workspace.mjs';
+import { canonical, checkTarget, missingGoogle, overlayGoogle, readEnvValue, resolveWorkspace } from './reset-workspace.mjs';
 
 const repoRoot = canonical(path.resolve(import.meta.dirname, '..'));
 const home = canonical(os.homedir());
@@ -80,4 +80,19 @@ test('accepts default and scratch paths', () => {
   assert.equal(check(path.join(home, '.ahead', 'workspace')), null);
   const scratch = mkdtempSync(path.join(os.tmpdir(), 'ahead-test-'));
   assert.equal(check(path.join(scratch, 'ws')), null);
+});
+
+test('google overlay: reports missing files, then copies calendar and contacts over the seed', () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'ahead-repo-'));
+  const ws = mkdtempSync(path.join(os.tmpdir(), 'ahead-ws-'));
+  assert.match(missingGoogle(root), /data\/google\/calendar\.json is missing/);
+  mkdirSync(path.join(root, 'data', 'google'), { recursive: true });
+  writeFileSync(path.join(root, 'data', 'google', 'calendar.json'), '{"events":[]}\n');
+  assert.match(missingGoogle(root), /contacts\.json is missing/);
+  writeFileSync(path.join(root, 'data', 'google', 'contacts.json'), '{"contacts":[]}\n');
+  assert.equal(missingGoogle(root), null);
+  writeFileSync(path.join(ws, 'calendar.json'), 'seed');
+  assert.deepEqual(overlayGoogle(root, ws), ['calendar.json', 'contacts.json']);
+  assert.equal(readFileSync(path.join(ws, 'calendar.json'), 'utf8'), '{"events":[]}\n');
+  assert.equal(readFileSync(path.join(ws, 'contacts.json'), 'utf8'), '{"contacts":[]}\n');
 });
