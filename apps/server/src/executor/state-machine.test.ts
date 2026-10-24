@@ -114,20 +114,20 @@ test('eager_end in BELIEF_FORMING does nothing', () => {
 
 const sent = () => run([{ type: 'eager_end' }], speculating()).ctx;
 
-test('phase2_done moves to STAGED', () => {
-  const r = run([{ type: 'phase2_done' }], sent());
+test('staged moves to STAGED', () => {
+  const r = run([{ type: 'staged' }], sent());
   assert.equal(r.ctx.state, 'STAGED');
   assert.deepEqual(types(r.effects), ['state:STAGED']);
 });
 
-test('phase2_done without phase2Sent is ignored (stale)', () => {
-  const r = run([{ type: 'phase2_done' }], speculating());
+test('staged without phase2Sent is ignored (stale)', () => {
+  const r = run([{ type: 'staged' }], speculating());
   assert.equal(r.ctx.state, 'SPECULATING');
   assert.deepEqual(r.effects, []);
 });
 
 test('resume from STAGED resets phase1 and returns to SPECULATING', () => {
-  const staged = run([{ type: 'phase2_done' }], sent()).ctx;
+  const staged = run([{ type: 'staged' }], sent()).ctx;
   const r = run([{ type: 'resume' }], staged);
   assert.deepEqual(types(r.effects), ['reset_phase1', 'state:SPECULATING']);
   assert.equal(r.ctx.state, 'SPECULATING');
@@ -145,9 +145,9 @@ test('resume before phase2 does nothing', () => {
   assert.deepEqual(r.effects, []);
 });
 
-test('phase2_done after resume is ignored', () => {
+test('staged after resume is ignored', () => {
   const resumed = run([{ type: 'resume' }], sent()).ctx;
-  const r = run([{ type: 'phase2_done' }], resumed);
+  const r = run([{ type: 'staged' }], resumed);
   assert.equal(r.ctx.state, 'SPECULATING');
   assert.deepEqual(r.effects, []);
 });
@@ -174,7 +174,7 @@ test('turn_end with diverged intent rolls back', () => {
 });
 
 test('turn_end in STAGED with matching intent waits for confirm but marks turnEnded', () => {
-  const staged = run([{ type: 'phase2_done' }], sent()).ctx;
+  const staged = run([{ type: 'staged' }], sent()).ctx;
   const r = run([{ type: 'turn_end', belief: b('draft_message', 0.9) }], staged);
   assert.deepEqual(r.effects, []);
   assert.equal(r.ctx.state, 'STAGED');
@@ -182,7 +182,7 @@ test('turn_end in STAGED with matching intent waits for confirm but marks turnEn
 });
 
 test('turn_end in STAGED with diverged intent rolls back', () => {
-  const staged = run([{ type: 'phase2_done' }], sent()).ctx;
+  const staged = run([{ type: 'staged' }], sent()).ctx;
   const r = run([{ type: 'turn_end', belief: b('add_note', 0.9) }], staged);
   assert.deepEqual(types(r.effects), ['rollback', 'state:ROLLED_BACK', 'warm']);
 });
@@ -198,24 +198,24 @@ test('turn_end in BELIEF_FORMING or ROLLED_BACK does nothing', () => {
 });
 
 test('confirm apply:true in STAGED commits', () => {
-  const staged = run([{ type: 'phase2_done' }], sent()).ctx;
+  const staged = run([{ type: 'staged' }], sent()).ctx;
   const r = run([{ type: 'confirm', apply: true }], staged);
   assert.deepEqual(types(r.effects), ['commit', 'state:COMMITTED', 'warm']);
   assert.equal(r.ctx.state, 'COMMITTED');
 });
 
 test('confirm apply:false in STAGED rolls back', () => {
-  const staged = run([{ type: 'phase2_done' }], sent()).ctx;
+  const staged = run([{ type: 'staged' }], sent()).ctx;
   const r = run([{ type: 'confirm', apply: false }], staged);
   assert.deepEqual(types(r.effects), ['rollback', 'state:ROLLED_BACK', 'warm']);
 });
 
-test('confirm apply:true in SPECULATING is held, then committed when phase2_done arrives', () => {
+test('confirm apply:true in SPECULATING is held, then committed when staged arrives', () => {
   let r = run([{ type: 'confirm', apply: true }], sent());
   assert.deepEqual(r.effects, []);
   assert.equal(r.ctx.pendingApply, true);
   assert.equal(r.ctx.state, 'SPECULATING');
-  r = run([{ type: 'phase2_done' }], r.ctx);
+  r = run([{ type: 'staged' }], r.ctx);
   assert.deepEqual(types(r.effects), ['state:STAGED', 'commit', 'state:COMMITTED', 'warm']);
   assert.equal(r.ctx.state, 'COMMITTED');
   assert.equal(r.ctx.pendingApply, null);
@@ -232,14 +232,23 @@ test('confirm outside SPECULATING/STAGED does nothing', () => {
   assert.deepEqual(run([{ type: 'confirm', apply: false }], initial()).effects, []);
 });
 
-test('failed in SPECULATING or STAGED rolls back', () => {
-  const staged = run([{ type: 'phase2_done' }], sent()).ctx;
-  for (const ctx of [speculating(), staged]) {
+test('failed in SPECULATING rolls back; in STAGED it is informational (no effects)', () => {
+  for (const ctx of [speculating(), sent()]) {
     const r = run([{ type: 'failed' }], ctx);
     assert.deepEqual(types(r.effects), ['rollback', 'state:ROLLED_BACK', 'warm']);
     assert.equal(r.ctx.locked, null);
     assert.equal(r.ctx.phase2Sent, false);
   }
+  const staged = run([{ type: 'staged' }], sent()).ctx;
+  const r = run([{ type: 'failed' }], staged);
+  assert.deepEqual(r.effects, []);
+  assert.deepEqual(r.ctx, staged);
+});
+
+test('confirm apply:true after an informational failed in STAGED still commits', () => {
+  const staged = run([{ type: 'staged' }], sent()).ctx;
+  const r = run([{ type: 'failed' }, { type: 'confirm', apply: true }], staged);
+  assert.deepEqual(types(r.effects), ['commit', 'state:COMMITTED', 'warm']);
 });
 
 test('failed in other states does nothing', () => {
@@ -248,14 +257,14 @@ test('failed in other states does nothing', () => {
 });
 
 test('COMMITTED ignores everything except turn_start', () => {
-  const committed = run([{ type: 'confirm', apply: true }, { type: 'phase2_done' }], sent()).ctx;
+  const committed = run([{ type: 'confirm', apply: true }, { type: 'staged' }], sent()).ctx;
   assert.equal(committed.state, 'COMMITTED');
   const evs: SmEvent[] = [
     { type: 'belief', belief: b('find_file', 0.9) },
     { type: 'eager_end' },
     { type: 'resume' },
     { type: 'turn_end', belief: b('find_file', 0.9) },
-    { type: 'phase2_done' },
+    { type: 'staged' },
     { type: 'failed' },
     { type: 'confirm', apply: false },
   ];
@@ -278,7 +287,7 @@ test('turn_start from a non-speculating state yields only state LISTENING', () =
 });
 
 test('turn_start while SPECULATING or STAGED rolls back the old turn first', () => {
-  const staged = run([{ type: 'phase2_done' }], sent()).ctx;
+  const staged = run([{ type: 'staged' }], sent()).ctx;
   for (const ctx of [speculating(), sent(), staged]) {
     const r = run([{ type: 'turn_start', turnId: 't2' }], ctx);
     assert.deepEqual(r.effects, [
@@ -293,7 +302,7 @@ test('turn_start while SPECULATING or STAGED rolls back the old turn first', () 
 });
 
 test('commit, rollback and reset_phase1 effects carry the turnId', () => {
-  const staged = run([{ type: 'phase2_done' }], sent()).ctx;
+  const staged = run([{ type: 'staged' }], sent()).ctx;
   assert.deepEqual(run([{ type: 'confirm', apply: true }], staged).effects[0], { type: 'commit', turnId: 't1' });
   assert.deepEqual(run([{ type: 'confirm', apply: false }], staged).effects[0], { type: 'rollback', turnId: 't1' });
   assert.deepEqual(run([{ type: 'resume' }], staged).effects[0], { type: 'reset_phase1', turnId: 't1' });
@@ -324,7 +333,7 @@ test('after failed, a lockable belief does not relock', () => {
 });
 
 test('after confirm apply:false, a lockable belief does not relock', () => {
-  const staged = run([{ type: 'phase2_done' }], sent()).ctx;
+  const staged = run([{ type: 'staged' }], sent()).ctx;
   const rolled = run([{ type: 'confirm', apply: false }], staged).ctx;
   const r = run([{ type: 'belief', belief: b('draft_message', 0.9) }], rolled);
   assert.deepEqual(r.effects, []);
@@ -337,7 +346,7 @@ test('turn_start clears noRelock', () => {
 });
 
 test('diverging belief while STAGED rolls back', () => {
-  const staged = run([{ type: 'phase2_done' }], sent()).ctx;
+  const staged = run([{ type: 'staged' }], sent()).ctx;
   const r = run([{ type: 'belief', belief: b('find_file', 0.8) }], staged);
   assert.deepEqual(types(r.effects), ['rollback', 'state:ROLLED_BACK', 'warm']);
 });

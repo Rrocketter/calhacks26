@@ -50,7 +50,8 @@ const toolResult = (toolUseId: string, toolName: string) =>
 
 // edit: Edit call, no ToolResult (diff only at turn end). early: Edit + ToolResult, then afterWrite.
 // early-changed: like early, then a second change before the Result. create: Create of notes/new.md.
-type Phase2Mode = 'edit' | 'block' | 'throw' | 'early' | 'early-changed' | 'create';
+// early-block: like early, then blocks until interrupted. early-fail: like early, then an error Result.
+type Phase2Mode = 'edit' | 'block' | 'throw' | 'early' | 'early-changed' | 'create' | 'early-block' | 'early-fail';
 interface FakeSession extends DroidLike {
   prompts: string[];
   calls: string[];
@@ -152,12 +153,24 @@ function factory(root: string, opts: { fail?: string } = {}): Factory {
               yield result('success');
               return;
             }
-            if (mode === 'early' || mode === 'early-changed') {
+            if (mode === 'early' || mode === 'early-changed' || mode === 'early-block' || mode === 'early-fail') {
               moveEvent(root);
               yield call('2', 'Edit', { file_path: 'calendar.json', old_str: 'a', new_str: 'b' });
               f.beforeWriteResult();
               yield toolResult('2', 'Edit');
               await f.afterWrite();
+              if (mode === 'early-fail') {
+                yield result('error');
+                return;
+              }
+              if (mode === 'early-block') {
+                const interrupted = new Promise<void>((r) => (onInterrupt = r));
+                started();
+                startedP = new Promise<void>((r) => (started = r));
+                await interrupted;
+                yield result('interrupted');
+                return;
+              }
               if (mode === 'early-changed') {
                 const cal = path.join(root, 'calendar.json');
                 fs.writeFileSync(cal, fs.readFileSync(cal, 'utf8').replace('2026-11-02T09:00:00-08:00', '2026-11-02T08:30:00-08:00'));
@@ -723,4 +736,105 @@ test('openSession resolving after the open timeout: the late session is closed, 
   await exec.warm(); // not adopted: a fresh session opens
   assert.equal(f.sessions.length, 2);
   assert.deepEqual(f.sessions[1]!.calls, []);
+});
+
+const waitFor = async (cond: () => boolean, ms = 2000): Promise<void> => {
+  const until = Date.now() + ms;
+  while (!cond()) {
+    if (Date.now() > until) throw new Error('waitFor timed out');
+    await new Promise((r) => setTimeout(r, 5));
+  }
+};
+
+test('onStaged fires once, with the first early diff, before the turn ends', { timeout: 5000 }, async () => {
+  const { f, events, exec } = setup();
+  withMarker(f, events);
+  await exec.phase1('t1', belief());
+  f.phase2.push('early-changed');
+  let stagedAt = -1;
+  let count = 0;
+  await exec.phase2('t1', belief(), {
+    onStaged: () => {
+      count++;
+      stagedAt = events.length;
+    },
+  });
+  assert.equal(count, 1);
+  const firstDiff = events.indexOf(droid(events, 'diff')[0]!);
+  assert.ok(firstDiff < stagedAt && stagedAt <= markerAt(events), 'onStaged after the first diff, before the turn ends');
+  assertValid(events);
+});
+
+test('onStaged is not called when no write result arrives (diff only at turn end)', async () => {
+  const { exec } = setup();
+  await exec.phase1('t1', belief());
+  let count = 0;
+  await exec.phase2('t1', belief(), { onStaged: () => void count++ });
+  assert.equal(count, 0);
+});
+
+test('commit during a blocked phase2 after an early diff lands exactly the staged content', { timeout: 5000 }, async () => {
+  const { root, git, raw, f, events, exec } = setup();
+  await exec.phase1('t1', belief());
+  f.phase2.push('early-block');
+  let staged = false;
+  const p2 = exec.phase2('t1', belief(), { onStaged: () => void (staged = true) });
+  await waitFor(() => staged);
+  await exec.commit('t1');
+  await p2; // resolves quietly, no throw
+  assert.ok(f.sessions[0]!.calls.includes('interrupt'));
+  assert.equal(await git.currentBranch(), 'main');
+  assert.match(calendar(root), /2026-11-02T09:00:00-08:00/);
+  assert.equal(await git.isClean(), true);
+  assert.deepEqual(specBranches(raw), []);
+  assert.equal(droid(events, 'diff').length, 1);
+  assert.equal(droid(events, 'result').length, 0, 'superseded phase2 emits no result');
+  assert.ok(!metrics(events).includes('phase2'));
+  assert.ok(metrics(events).includes('commit'));
+  assertValid(events);
+});
+
+test('a write that lands after staging but before commit is dropped', { timeout: 5000 }, async () => {
+  const { root, git, raw, f, events, exec } = setup();
+  await exec.phase1('t1', belief());
+  f.phase2.push('early-block');
+  let staged = false;
+  const p2 = exec.phase2('t1', belief(), { onStaged: () => void (staged = true) });
+  await waitFor(() => staged);
+  // The turn keeps editing after the staged diff was shown.
+  const cal = path.join(root, 'calendar.json');
+  fs.writeFileSync(cal, fs.readFileSync(cal, 'utf8').replace('2026-11-02T09:00:00-08:00', '2026-11-02T08:30:00-08:00'));
+  fs.writeFileSync(path.join(root, 'stray.txt'), 'late\n');
+  await exec.commit('t1');
+  await p2;
+  assert.match(calendar(root), /2026-11-02T09:00:00-08:00/);
+  assert.doesNotMatch(calendar(root), /08:30/);
+  assert.equal(fs.existsSync(path.join(root, 'stray.txt')), false);
+  assert.equal(await git.isClean(), true);
+  assert.deepEqual(specBranches(raw), []);
+  const shown = (droid(events, 'diff').at(-1)!.payload as { diff: string }).diff;
+  assert.match(shown, /\+.*2026-11-02T09:00:00-08:00/);
+  assertValid(events);
+});
+
+test('turn failure after staging emits result failed:true, throws, closes, keeps the staged branch', { timeout: 5000 }, async () => {
+  const { root, git, raw, f, events, exec } = setup();
+  await exec.phase1('t1', belief());
+  f.phase2.push('early-fail');
+  let staged = 0;
+  await assert.rejects(exec.phase2('t1', belief(), { onStaged: () => void staged++ }), SpeculationFailed);
+  assert.equal(staged, 1);
+  const results = droid(events, 'result');
+  assert.equal(results.length, 1);
+  assert.deepEqual(results[0]!.payload, { ok: false, failed: true, summary: 'droid turn failed after staging' });
+  assert.ok(events.indexOf(droid(events, 'diff')[0]!) < events.indexOf(results[0]!));
+  assert.ok(f.sessions[0]!.calls.includes('close'));
+  assert.deepEqual(specBranches(raw), ['spec/t1']);
+  assert.equal(await git.currentBranch(), 'spec/t1');
+  // The staged diff can still be applied.
+  await exec.commit('t1');
+  assert.match(calendar(root), /2026-11-02T09:00:00-08:00/);
+  assert.equal(await git.isClean(), true);
+  assert.deepEqual(specBranches(raw), []);
+  assertValid(events);
 });

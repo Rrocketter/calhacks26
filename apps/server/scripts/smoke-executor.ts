@@ -57,7 +57,9 @@ function describe(ev: ServerEvent, ws: string): string {
       } else if (ev.kind === 'diff') {
         bits.push(`file=${String(p.file)} len=${typeof p.diff === 'string' ? p.diff.length : 0}`);
       } else if (ev.kind === 'result') {
-        bits.push(`ok=${String(p.ok)} summaryLen=${typeof p.summary === 'string' ? p.summary.length : 0}`);
+        // failed:true (R25) marks a staged diff stale; reported, not a smoke failure.
+        if (p.failed === true) bits.push('failed=true');
+        else bits.push(`ok=${String(p.ok)} summaryLen=${typeof p.summary === 'string' ? p.summary.length : 0}`);
       }
       return `droid_event ${bits.join(' ')}`;
     }
@@ -125,6 +127,7 @@ async function main(): Promise<void> {
     // First diff event (early diff, R24) and the result event (end-of-phase diff point).
     let diffAt: number | null = null;
     let resultAt: number | null = null;
+    let stagedAt: number | null = null;
     const emit = (ev: ServerEvent): void => {
       events.push(ev);
       if (parseServerEvent(JSON.stringify(ev)) === null) {
@@ -136,6 +139,12 @@ async function main(): Promise<void> {
       if (ev.type === 'droid_event' && ev.kind === 'diff' && diffAt === null) diffAt = performance.now();
       if (ev.type === 'droid_event' && ev.kind === 'result' && resultAt === null) resultAt = performance.now();
       console.log(`[event] ${describe(ev, ws)}`);
+      if (ev.type === 'state_change' && ev.state === 'STAGED' && stagedAt === null) {
+        stagedAt = performance.now();
+        // Run A confirms the moment STAGED shows, while the Phase 2 turn may still be running (R25).
+        // Deferred so the confirm is not fed re-entrantly from inside the Speculator's own feed.
+        if (apply) setImmediate(() => spec.onConfirm(turnId, true));
+      }
     };
     const exec = createDroidExecutor(emit);
     const spec = new Speculator(exec, emit);
@@ -152,7 +161,7 @@ async function main(): Promise<void> {
       await spec.idle();
       spec.onServerEvent({ type: 'turn_end', turnId, ts: Date.now() });
       await spec.idle();
-      spec.onConfirm(turnId, apply);
+      if (!apply) spec.onConfirm(turnId, false);
       await spec.idle();
     } finally {
       await exec.close();
@@ -172,6 +181,7 @@ async function main(): Promise<void> {
     const lockToDiff = resultAt === null ? null : (resultAt as number) - lockAt;
     const lockToFirstDiff = diffAt === null ? null : (diffAt as number) - lockAt;
     const phase2ToFirstDiff = diffAt === null || eagerAt === undefined ? null : (diffAt as number) - eagerAt;
+    const lockToStaged = stagedAt === null ? null : (stagedAt as number) - lockAt;
     const fmt = (v: number | null): string => (v === null ? 'n/a' : `${Math.round(v)}ms`);
 
     check(invalid === 0, `all events valid (invalid=${invalid})`);
@@ -201,7 +211,7 @@ async function main(): Promise<void> {
     console.log(
       `[latency] ${name} createSession=${ms('createSession')} phase1=${ms('phase1')} phase2=${ms('phase2')} diff=${ms('diff')} ` +
         `phase2-to-first-diff=${fmt(phase2ToFirstDiff)} lock-to-first-diff=${fmt(lockToFirstDiff)} ` +
-        `belief-lock-to-diff=${fmt(lockToDiff)} ${apply ? `commit=${ms('commit')}` : `rollback=${ms('rollback')}`}`,
+        `lock-to-staged=${fmt(lockToStaged)} belief-lock-to-diff=${fmt(lockToDiff)} ${apply ? `commit=${ms('commit')}` : `rollback=${ms('rollback')}`}`,
     );
     const pass = fail.length === 0;
     console.log(`${pass ? 'PASS' : 'FAIL'} run ${name}${pass ? '' : `: ${fail.join('; ')}`}`);

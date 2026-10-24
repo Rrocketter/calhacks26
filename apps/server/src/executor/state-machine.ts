@@ -9,7 +9,8 @@ export type SmEvent =
   | { type: 'eager_end' }
   | { type: 'resume' }
   | { type: 'turn_end'; belief: Belief | null }
-  | { type: 'phase2_done' }
+  // Phase 2's edit landed (early diff), or the turn ended with no edit.
+  | { type: 'staged' }
   | { type: 'failed' }
   | { type: 'confirm'; apply: boolean };
 
@@ -62,12 +63,12 @@ export function transition(ctx: SmCtx, ev: SmEvent): Result {
       return onBelief(ctx, ev.belief);
     case 'eager_end':
       return sendPhase2(ctx);
-    case 'phase2_done':
-      return onPhase2Done(ctx);
+    case 'staged':
+      return onStaged(ctx);
     case 'failed':
-      return ctx.state === 'SPECULATING' || ctx.state === 'STAGED'
-        ? rollback({ ...ctx, noRelock: true })
-        : { ctx, effects: [] };
+      // In STAGED the diff is already shown; a later turn failure is informational (the executor
+      // emits result failed:true for the HUD).
+      return ctx.state === 'SPECULATING' ? rollback({ ...ctx, noRelock: true }) : { ctx, effects: [] };
     case 'resume':
       if (!(ctx.state === 'STAGED' || (ctx.state === 'SPECULATING' && ctx.phase2Sent))) return { ctx, effects: [] };
       return {
@@ -83,7 +84,7 @@ export function transition(ctx: SmCtx, ev: SmEvent): Result {
   }
 }
 
-function onPhase2Done(ctx: SmCtx): Result {
+function onStaged(ctx: SmCtx): Result {
   if (ctx.state !== 'SPECULATING' || !ctx.phase2Sent) return { ctx, effects: [] };
   const staged: Result = { ctx: { ...ctx, state: 'STAGED' }, effects: [{ type: 'state', state: 'STAGED' }] };
   if (ctx.pendingApply !== true) return staged;

@@ -67,15 +67,16 @@ export class Speculator {
         break;
       case 'phase2': {
         const seq = ++this.phase2Seq;
-        this.track(
-          () => x.phase2(e.turnId, e.belief),
-          'phase2',
-          e.turnId,
-          () => {
-            if (seq === this.phase2Seq && this.isCurrent(e.turnId)) this.feed({ type: 'phase2_done' });
-          },
-          true,
-        );
+        let staged = false;
+        // R19 guard: only the latest phase2 of the current turn, with no reset_phase1 after it, stages.
+        const stage = (): void => {
+          if (staged || seq !== this.phase2Seq || !this.isCurrent(e.turnId)) return;
+          staged = true;
+          this.feed({ type: 'staged' });
+        };
+        // STAGED when the edit lands (onStaged); a phase2 that resolves with no edit stages on resolve.
+        // A failure after staging still feeds `failed`, which STAGED ignores.
+        this.track(() => x.phase2(e.turnId, e.belief, { onStaged: stage }), 'phase2', e.turnId, stage, true);
         break;
       }
       case 'reset_phase1':

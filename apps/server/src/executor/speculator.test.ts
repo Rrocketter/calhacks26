@@ -8,7 +8,7 @@ import { SpeculationFailed, type Executor } from './types.js';
 type Call = { name: string; args: unknown[] };
 type Opts = {
   withDenied?: boolean;
-  phase2?: (turnId: string) => Promise<void>;
+  phase2?: (turnId: string, hooks?: { onStaged?: () => void }) => Promise<void>;
   commit?: (turnId: string) => Promise<void>;
   rollback?: (turnId: string) => Promise<void>;
 };
@@ -21,9 +21,9 @@ function setup(opts: Opts = {}) {
   const executor: Executor = {
     warm: async () => void rec('warm', []),
     phase1: async (t, b) => void rec('phase1', [t, b.intent]),
-    phase2: async (t, b) => {
+    phase2: async (t, b, hooks) => {
       rec('phase2', [t, b.intent]);
-      if (opts.phase2) return opts.phase2(t);
+      if (opts.phase2) return opts.phase2(t, hooks);
       for await (const ev of mockDroidRun(t, { withDenied: opts.withDenied })) emit(ev);
     },
     resetToPhase1: async (t) => void rec('resetToPhase1', [t]),
@@ -127,7 +127,7 @@ test('other rejection emits error and rolls back', async () => {
   for (const e of s.events) parseServerEvent(JSON.stringify(e));
 });
 
-test('R19: stale first phase2 resolving after a second phase2 does not stage', async () => {
+test('R19: stale first phase2 resolving after a second phase2 does not stage (fallback staged)', async () => {
   const releases: (() => void)[] = [];
   const s = setup({ phase2: () => new Promise<void>((r) => releases.push(r)) });
   s.spec.onServerEvent(ev('turn_start', 't1'));
@@ -293,4 +293,109 @@ test('non-SpeculationFailed error messages are redacted of env values', async (t
   assert.equal(errs.length, 1);
   assert.ok(!errs[0]!.message.includes(secret));
   assert.match(errs[0]!.message, /^warm: bad key \[redacted\]$/);
+});
+
+const tick = () => new Promise((r) => setImmediate(r));
+// A phase2 that hands its onStaged hook out and stays pending until released or failed.
+function heldPhase2() {
+  const h: { onStaged: () => void; release: () => void; fail: (e: Error) => void } = {
+    onStaged: () => undefined,
+    release: () => undefined,
+    fail: () => undefined,
+  };
+  const phase2 = (_t: string, hooks?: { onStaged?: () => void }) =>
+    new Promise<void>((res, rej) => {
+      h.onStaged = () => hooks?.onStaged?.();
+      h.release = () => res();
+      h.fail = (e) => rej(e);
+    });
+  return { h, phase2 };
+}
+
+test('STAGED is emitted on onStaged, before the phase2 promise settles', async () => {
+  const { h, phase2 } = heldPhase2();
+  const s = setup({ phase2 });
+  s.spec.onServerEvent(ev('turn_start', 't1'));
+  s.spec.onServerEvent(bu('t1', belief('reschedule_event', 0.8)));
+  s.spec.onServerEvent(ev('turn_eager_end', 't1'));
+  assert.equal(s.states().at(-1), 'SPECULATING');
+  h.onStaged();
+  assert.equal(s.states().at(-1), 'STAGED');
+  h.onStaged(); // repeated hook: no second STAGED
+  h.release();
+  await s.spec.idle();
+  assert.deepEqual(s.states(), ['LISTENING', 'BELIEF_FORMING', 'SPECULATING', 'STAGED']);
+  for (const e of s.events) parseServerEvent(JSON.stringify(e));
+});
+
+test('fallback: phase2 resolving with no edit (no onStaged) still stages', async () => {
+  const { h, phase2 } = heldPhase2();
+  const s = setup({ phase2 });
+  s.spec.onServerEvent(ev('turn_start', 't1'));
+  s.spec.onServerEvent(bu('t1', belief('find_file', 0.8)));
+  s.spec.onServerEvent(ev('turn_eager_end', 't1'));
+  await tick();
+  assert.ok(!s.states().includes('STAGED'));
+  h.release();
+  await s.spec.idle();
+  assert.equal(s.states().at(-1), 'STAGED');
+  assert.equal(s.states().filter((x) => x === 'STAGED').length, 1);
+});
+
+test('failure after staging: no ROLLED_BACK, no rollback call, no error event', async () => {
+  const { h, phase2 } = heldPhase2();
+  const s = setup({ phase2 });
+  s.spec.onServerEvent(ev('turn_start', 't1'));
+  s.spec.onServerEvent(bu('t1', belief('reschedule_event', 0.8)));
+  s.spec.onServerEvent(ev('turn_eager_end', 't1'));
+  h.onStaged();
+  h.fail(new SpeculationFailed('phase2 error'));
+  await s.spec.idle();
+  assert.ok(!s.names().includes('rollback'));
+  assert.ok(!s.states().includes('ROLLED_BACK'));
+  assert.equal(s.states().at(-1), 'STAGED');
+  assert.deepEqual(errors(s.events), []);
+  // The staged diff can still be applied.
+  s.spec.onConfirm('t1', true);
+  await s.spec.idle();
+  assert.equal(s.states().at(-1), 'COMMITTED');
+});
+
+test('confirm apply:true in STAGED while phase2 is pending commits right away', async () => {
+  const { h, phase2 } = heldPhase2();
+  const s = setup({ phase2 });
+  s.spec.onServerEvent(ev('turn_start', 't1'));
+  s.spec.onServerEvent(bu('t1', belief('reschedule_event', 0.8)));
+  s.spec.onServerEvent(ev('turn_eager_end', 't1'));
+  h.onStaged();
+  s.spec.onConfirm('t1', true);
+  assert.deepEqual(s.names(), ['phase1', 'phase2', 'commit', 'warm']);
+  assert.deepEqual(s.states().slice(-2), ['STAGED', 'COMMITTED']);
+  h.release();
+  await s.spec.idle();
+  assert.deepEqual(s.names(), ['phase1', 'phase2', 'commit', 'warm']);
+});
+
+test('R19: onStaged from a phase2 superseded by resume does not stage', async () => {
+  const held: ReturnType<typeof heldPhase2>[] = [];
+  const s = setup({
+    phase2: (t, hooks) => {
+      const x = heldPhase2();
+      held.push(x);
+      return x.phase2(t, hooks);
+    },
+  });
+  s.spec.onServerEvent(ev('turn_start', 't1'));
+  s.spec.onServerEvent(bu('t1', belief('reschedule_event', 0.8)));
+  s.spec.onServerEvent(ev('turn_eager_end', 't1'));
+  s.spec.onServerEvent(ev('turn_resume', 't1'));
+  held[0]!.h.onStaged();
+  held[0]!.h.release();
+  await tick();
+  assert.ok(!s.states().includes('STAGED'));
+  s.spec.onServerEvent(ev('turn_eager_end', 't1'));
+  held[1]!.h.onStaged();
+  assert.equal(s.states().at(-1), 'STAGED');
+  held[1]!.h.release();
+  await s.spec.idle();
 });

@@ -12,7 +12,7 @@ import { makeGuard, type Guard } from './guard.js';
 import { phase1Prompt, phase2Prompt } from './prompts.js';
 import { openDroidSession, writeSandboxSettings } from './sandbox.js';
 import { makePermissionHandler, runTurn, type PermissionHandler } from './turn.js';
-import { redact, SpeculationFailed, type DroidLike, type Emit, type Executor } from './types.js';
+import { redact, SpeculationFailed, type DroidLike, type Emit, type Executor, type Phase2Hooks } from './types.js';
 
 const PHASE_TIMEOUT_MS = 180_000;
 // After a phase-timeout interrupt, how long the turn may take to end before the session is closed.
@@ -77,10 +77,13 @@ export class DroidExecutor implements Executor {
   private queuedTurnId: string | null = null;
   private running: Running | null = null;
   private chain: Promise<unknown> = Promise.resolve();
-  // Bumped by rollback (supersedes any phase) and resetToPhase1 (supersedes Phase 2). A phase
-  // captures both when queued and resolves quietly if either moved (R15).
+  // Bumped by rollback (supersedes any phase), resetToPhase1 and commit (supersede Phase 2). A phase
+  // captures them when queued and resolves quietly if any moved (R15, R25).
   private rollbackGen = 0;
   private resetGen = 0;
+  private commitGen = 0;
+  // Branch commit holding exactly the last diff shown by the running/last Phase 2 (R25).
+  private staged: { turnId: string; sha: string } | null = null;
   // Set by close(); terminal. No session opens and no phase runs afterwards.
   private closed = false;
 
@@ -240,10 +243,11 @@ export class DroidExecutor implements Executor {
     });
   }
 
-  phase2(turnId: string, belief: Belief): Promise<void> {
+  phase2(turnId: string, belief: Belief, hooks: Phase2Hooks = {}): Promise<void> {
     const gen = this.rollbackGen;
     const rgen = this.resetGen;
-    const superseded = (): boolean => gen !== this.rollbackGen || rgen !== this.resetGen;
+    const cgen = this.commitGen;
+    const superseded = (): boolean => gen !== this.rollbackGen || rgen !== this.resetGen || cgen !== this.commitGen;
     return this.enqueue(async () => {
       if (this.closed) throw new SpeculationFailed('executor closed');
       if (superseded()) return;
@@ -252,8 +256,11 @@ export class DroidExecutor implements Executor {
       if (this.live?.turnId !== turnId || this.live.post1 === null) return this.fail('phase2 without phase1');
       const t0 = performance.now();
       const now = this.opts.now?.() ?? new Date();
-      // Early diff (R24): each successful write result emits the files whose diff changed. Jobs run
-      // one at a time so two quick writes don't race git; one that starts after supersession does nothing.
+      this.staged = null;
+      // Early diff (R24) and STAGED (R25): each successful write result commits the working tree on
+      // the branch and emits the files whose diff changed, so the branch holds exactly what is shown.
+      // The first such commit calls onStaged. Jobs run one at a time so two quick writes don't race
+      // git; one that starts after supersession does nothing.
       const emitted = new Map<string, string>();
       const emitDiffs = (diffs: { file: string; diff: string }[]): void => {
         for (const d of diffs) {
@@ -269,9 +276,17 @@ export class DroidExecutor implements Executor {
             if (superseded() || this.closed) return;
             const diffs = await this.git.diffWorkingTree();
             if (superseded()) return;
+            if (diffs.length === 0 || diffs.every((d) => emitted.get(d.file) === d.diff)) return;
+            const sha = await this.git.commitAll('phase2-edit');
+            // A commit or reset that arrived during commitAll resets the branch to the previous staged sha.
+            if (superseded()) return;
+            this.staged = { turnId, sha };
             const first = emitted.size === 0;
             emitDiffs(diffs);
-            if (first && emitted.size > 0) this.metric('first-diff', performance.now() - t0);
+            if (first) {
+              this.metric('first-diff', performance.now() - t0);
+              hooks.onStaged?.();
+            }
           })
           .catch((e: unknown) => console.log(`[droid] early diff failed (${e instanceof Error ? e.name : 'unknown'})`));
         return writes;
@@ -291,7 +306,7 @@ export class DroidExecutor implements Executor {
       // No early-diff git work may overlap commitAll, a reset or a rollback.
       await writes;
       if (superseded()) return;
-      if (r.outcome !== 'success') return this.fail(`phase2 ${r.outcome}`);
+      if (r.outcome !== 'success') return this.failPhase2(turnId, `phase2 ${r.outcome}`);
       let diffs: { file: string; diff: string }[];
       try {
         await this.git.commitAll('phase2');
@@ -300,7 +315,7 @@ export class DroidExecutor implements Executor {
         diffs = await this.git.diffFiles(turnId);
         this.metric('diff', performance.now() - td);
       } catch (e) {
-        return this.fail('git commit/diff failed', e);
+        return this.failPhase2(turnId, 'git commit/diff failed', e);
       }
       emitDiffs(diffs);
       this.opts.emit({
@@ -333,10 +348,40 @@ export class DroidExecutor implements Executor {
     });
   }
 
+  // Before staging, unchanged: R24 fail. After staging (R25): the shown diff stays on the branch,
+  // dropping any half-landed later edit, and result failed:true tells the HUD it is stale.
+  private async failPhase2(turnId: string, reason: string, cause?: unknown): Promise<never> {
+    const staged = this.staged?.turnId === turnId ? this.staged.sha : null;
+    if (staged !== null) {
+      // Lengths and booleans only in logs; the summary is a fixed string.
+      this.opts.emit({
+        type: 'droid_event',
+        turnId,
+        kind: 'result',
+        payload: { ok: false, failed: true, summary: 'droid turn failed after staging' },
+        ts: Date.now(),
+      });
+      await this.git.resetTo(staged).catch(() => console.log('[droid] reset to staged commit failed'));
+    }
+    return this.fail(reason, cause);
+  }
+
+  // A commit while this turn's Phase 2 is still running (STAGED fired on the landed edit) supersedes
+  // it synchronously, interrupts the turn, then on the chain resets the branch to the staged commit
+  // so main gets exactly the diff the HUD showed (R25).
   commit(turnId: string): Promise<void> {
+    const midPhase2 = this.running?.phase === 'phase2' && this.running.turnId === turnId;
+    if (midPhase2) this.commitGen++;
+    const interrupted = midPhase2 ? this.interruptRunning(['phase2']) : Promise.resolve();
     return this.enqueue(async () => {
+      await interrupted;
       const t0 = performance.now();
       try {
+        if (midPhase2) {
+          // The superseded phase2 job (and its write jobs) finished before this one started.
+          const sha = this.staged?.turnId === turnId ? this.staged.sha : this.live?.turnId === turnId ? this.live.post1 : null;
+          if (sha !== null) await this.git.resetTo(sha);
+        }
         await this.git.merge(turnId);
       } catch (e) {
         return this.fail('git merge failed', e);
