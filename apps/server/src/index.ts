@@ -46,7 +46,7 @@ async function main(): Promise<void> {
   const executor = createDroidExecutor((ev) => sink(ev));
   await executor.warm(); // logs [droid] createSession
 
-  let activeWs: WebSocket | null = null;
+  let active: { ws: WebSocket; teardown: () => void } | null = null;
 
   const http = createServer((_req, res) => {
     res.writeHead(404).end();
@@ -55,11 +55,14 @@ async function main(): Promise<void> {
 
   wss.on('connection', (ws) => {
     console.log('[voice] client connected');
-    if (activeWs) {
+    if (active) {
+      // Single-user demo: tear the old connection down synchronously, so its rollback runs on the
+      // shared executor before this connection points the sink at its own orchestrator.
       console.log('[server] replacing active connection');
-      activeWs.close();
+      const prev = active;
+      prev.teardown();
+      prev.ws.close();
     }
-    activeWs = ws;
 
     // Never throws: session.ts calls send from promise catch handlers.
     const send = (e: ServerEvent): void => {
@@ -127,6 +130,17 @@ async function main(): Promise<void> {
       : null;
 
     const orch = new Orchestrator({ send, voice: session, tracker, speculator, speaker: sonic, answerer, demo });
+    let tornDown = false;
+    const teardown = (): void => {
+      if (tornDown) return;
+      tornDown = true;
+      orch.close();
+      inkClient?.close();
+      sonic.close();
+      if (sink === orch.onSpeculatorEvent) sink = () => {};
+      if (active?.ws === ws) active = null;
+    };
+    active = { ws, teardown };
     sink = orch.onSpeculatorEvent;
     void sonic.connect();
     if (inkClient) void inkClient.connect();
@@ -141,11 +155,7 @@ async function main(): Promise<void> {
     });
     ws.on('close', () => {
       console.log('[voice] client disconnected');
-      orch.close();
-      inkClient?.close();
-      sonic.close();
-      if (activeWs === ws) activeWs = null;
-      if (sink === orch.onSpeculatorEvent) sink = () => {};
+      teardown();
     });
     ws.on('error', (err) => console.error(`[voice] client socket error ${err.message}`));
   });
@@ -154,6 +164,18 @@ async function main(): Promise<void> {
     console.log('[server] shutting down');
     void Promise.allSettled([executor.close(), moss.close()]).then(() => process.exit(0));
   });
+
+  // A listen failure (e.g. EADDRINUSE) is a startup failure: release the warmed Droid session first.
+  // ws re-emits http server errors on wss, so both need a listener.
+  let failed = false;
+  const onListenError = (err: Error): void => {
+    if (failed) return;
+    failed = true;
+    console.error(`[server] startup failed ${err.message}`);
+    void Promise.allSettled([executor.close(), moss.close()]).then(() => process.exit(1));
+  };
+  http.once('error', onListenError);
+  wss.on('error', onListenError);
 
   http.listen(PORT, 'localhost', () => {
     const tags = `${DEMO_MODE ? ' DEMO_MODE' : ''}${MOCK_BELIEF ? ' mock belief' : ''}`;
