@@ -28,6 +28,9 @@ const DAY_RE = new RegExp(`\\b(${[...WEEKDAYS, 'today', 'tomorrow'].join('|')})\
 const TIME_AT_RE = /\bat (\d{1,2})(?: (pm|am))?\b/;
 const TIME_MERIDIEM_RE = /\b(\d{1,2}) (pm|am)\b/;
 const FILE_RE = /\b(q\d deck|budget)\b/;
+/** Part of day as a time, used only when no clock time was said. */
+const PART_OF_DAY: Record<string, string> = { morning: '09:00', noon: '12:00', afternoon: '14:00', evening: '18:00' };
+const PART_OF_DAY_RE = new RegExp(`\\b(${Object.keys(PART_OF_DAY).join('|')})\\b`);
 
 function escapeRe(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -53,6 +56,10 @@ export function makeEntityExtractor(
     if (day) out.day = day[1]!;
     const t = TIME_AT_RE.exec(text) ?? TIME_MERIDIEM_RE.exec(text);
     if (t) out.time = t[2] ? `${t[1]} ${t[2]}` : t[1]!;
+    else {
+      const part = PART_OF_DAY_RE.exec(text);
+      if (part) out.time = PART_OF_DAY[part[1]!]!;
+    }
     const file = FILE_RE.exec(text);
     if (file) out.file = file[1]!;
     return out;
