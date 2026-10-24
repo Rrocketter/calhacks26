@@ -141,3 +141,9 @@ test('every phase2 tells Droid to stop right after the edit (find_file: reply wi
     assert.ok(p2.endsWith(CLOSING), intent);
   }
 });
+
+test('draft_message phase2 forbids a sign-off and names other than the recipient', () => {
+  const p2 = phase2Prompt(belief('draft_message', { person: 'Priya Shah' }), NOW);
+  assert.match(p2, /No sign-off and no signature/);
+  assert.match(p2, /Name no one except the recipient unless the details above name them\./);
+});
