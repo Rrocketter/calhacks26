@@ -1,4 +1,4 @@
-import type { Belief, Claim, ClientEvent, DroidDiffPayload, RetrievalMode, ServerEvent, State } from '@ahead/contracts';
+import type { Belief, Claim, ClientEvent, DroidDiffPayload, MossHit, RetrievalMode, ServerEvent, State } from '@ahead/contracts';
 import { SPECULATIVE } from './executor/state-machine.js';
 import {
   APPLIED_REPLY,
@@ -50,6 +50,8 @@ export type OrchestratorDeps = {
   confirmWindowMs?: number; // default CONFIRM_WINDOW_MS
   /** Conversation memory (Moss). Null or absent: nothing is remembered. */
   memory?: MemoryPort | null;
+  /** Upcoming calendar hits (date >= todayIso) for a lookup's answer. Absent: belief hits only. */
+  upcoming?: ((text: string, todayIso: string) => Promise<MossHit[]>) | null;
   /** The tracker's retriever, switched by the HUD's retrieval A/B toggle. Null or absent: no toggle. */
   retrieval?: { mode: RetrievalMode; readonly delayMs: number } | null;
 };
@@ -66,7 +68,8 @@ export const CONFIRM_WINDOW_MS = 6000;
 export const CONFIRM_WINDOW_LABEL = 'confirm_window';
 /** A client confirm this soon after a spoken answer settled the same correction lost the race. */
 export const FIRST_WINS_MS = 2000;
-const DEFAULT_FIXTURE = 'demo-utterance-1';
+/** DEMO_MODE plays the real-data script (IMPORT_GOOGLE=1); the Priya fixtures are for unit tests. */
+export const DEFAULT_FIXTURE = 'demo-real-1';
 
 type Awaiting = { kind: 'correction'; turnId: string; claim: Claim } | { kind: 'apply'; turnId: string } | null;
 /** Speculator-bound events of an interjected turn, deferred until the correction resolves. */
@@ -442,7 +445,11 @@ export class Orchestrator {
     if (belief?.intent === 'lookup') {
       let answer: string;
       try {
-        answer = (await this.d.answerer.answer(finalText, belief.topHits)).trim();
+        const today = this.today();
+        const upcoming = this.d.upcoming ? await this.d.upcoming(finalText, isoLocal(today)) : [];
+        const seen = new Set(upcoming.map((h) => h.docId));
+        const hits = [...upcoming, ...belief.topHits.filter((h) => !seen.has(h.docId))];
+        answer = (await this.d.answerer.answer(finalText, hits, today)).trim();
         if (!answer) throw new Error('empty answer');
       } catch (err) {
         this.error('llm', `answer failed: ${String(err)}`.slice(0, 200));

@@ -86,11 +86,19 @@ export function correctBelief(belief: Belief, claim: Claim, today: Date): Belief
 }
 
 export interface Answerer {
-  answer(question: string, hits: MossHit[]): Promise<string>;
+  answer(question: string, hits: MossHit[], today?: Date): Promise<string>;
 }
 
 const ANSWER_SYSTEM =
-  "Answer the user's question in one short spoken sentence using only the snippets. If the snippets don't contain the answer, say you don't know.";
+  "Answer the user's question in one short spoken sentence using only the snippets. If the snippets don't contain the answer, say you don't know. " +
+  'Calendar snippets can list past and future occurrences of a repeating event: when asked when something is or is due, give the next one on or after today. ' +
+  "If an event's title names a time (\"due 11:59 PM\"), give that time, not the event's start time.";
+
+/** "Today is Saturday, October 24, 2026." for the answer prompt. */
+export function todayLine(today: Date): string {
+  const d = today.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+  return `Today is ${d}.`;
+}
 
 export class HaikuAnswerer implements Answerer {
   private readonly client: Anthropic;
@@ -99,7 +107,7 @@ export class HaikuAnswerer implements Answerer {
     this.client = client ?? new Anthropic({ apiKey: requireEnv('ANTHROPIC_API_KEY') });
   }
 
-  async answer(question: string, hits: MossHit[]): Promise<string> {
+  async answer(question: string, hits: MossHit[], today: Date = new Date()): Promise<string> {
     const snippets = hits.length
       ? hits.map((h, i) => `${i + 1}. ${h.snippet}`).join('\n')
       : '(none)';
@@ -109,7 +117,7 @@ export class HaikuAnswerer implements Answerer {
       max_tokens: 200,
       thinking: { type: 'disabled' },
       system: ANSWER_SYSTEM,
-      messages: [{ role: 'user', content: `Question: ${question}\n\nSnippets:\n${snippets}` }],
+      messages: [{ role: 'user', content: `${todayLine(today)}\nQuestion: ${question}\n\nSnippets:\n${snippets}` }],
     });
     logLatency('llm', 'answer', performance.now() - t0);
     const block = msg.content.find((b) => b.type === 'text');

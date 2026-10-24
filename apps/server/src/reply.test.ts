@@ -7,6 +7,7 @@ import {
   correctionAck,
   parseConfirm,
   stagedLine,
+  todayLine,
 } from './reply.js';
 
 function belief(intent: Belief['intent'], entities: Record<string, string>, claims: Claim[] = []): Belief {
@@ -74,4 +75,14 @@ test('correctBelief makes the corrected value the only value and records the sup
   assert.equal(out.entities.superseded_day, 'thursday');
   assert.ok(!Object.entries(out.entities).some(([k, v]) => k !== 'superseded_day' && /thursday/i.test(v)));
   assert.deepEqual(correctBelief(out, claim, new Date(2026, 9, 24)).entities, out.entities); // idempotent
+});
+
+test('todayLine names the weekday and date', () => {
+  assert.equal(todayLine(new Date(2026, 9, 24)), 'Today is Saturday, October 24, 2026.');
+});
+
+test('correctBelief rewrites a possessive day in the message slot', () => {
+  const c: Claim = { field: 'day', said: 'Tuesday', known: 'Monday', docId: 'g-evt-vqe' };
+  const b = belief('draft_message', { person: 'Esha Telang', day: 'tuesday', message: "I'll present the VQE results at Tuesday's group meeting." }, [c]);
+  assert.equal(correctBelief(b, c, new Date(2026, 9, 24)).entities.message, "I'll present the VQE results at Monday's group meeting.");
 });

@@ -47,6 +47,24 @@ export class MossIndex implements Retriever {
     return { hits: mem ? mergeHits(hits, mem.hits, k) : hits, latencyMs };
   }
 
+  /**
+   * Calendar events dated today or later that match `text`. The corpus holds every occurrence of a
+   * repeating event, and past ones often outrank the next one, so a lookup adds these first.
+   */
+  async upcoming(text: string, todayIso: string, k = 3): Promise<RetrievedHit[]> {
+    if (!text.trim()) return [];
+    const filter = {
+      $and: [
+        { field: 'type', condition: { $eq: 'calendar' } },
+        { field: 'date', condition: { $gte: todayIso } },
+      ],
+    };
+    const start = performance.now();
+    const res = await this.client.query(MOSS_INDEX.corpus, text, { alpha: ALPHA, topK: k, filter } as QueryOptions);
+    logLatency('moss', 'upcoming', performance.now() - start);
+    return res.docs.map((d) => ({ docId: d.id, score: d.score, snippet: d.text.slice(0, 160), metadata: d.metadata ?? {} }));
+  }
+
   async close(): Promise<void> {
     await this.client.close();
   }

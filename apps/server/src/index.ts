@@ -1,13 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
-import path from 'node:path';
 import { parseClientEvent, type ServerEvent } from '@ahead/contracts';
 import { loadFixture } from '@ahead/contracts/mocks/node';
 import WebSocket, { WebSocketServer } from 'ws';
 import { HaikuIntentLlm } from './belief/haiku.js';
 import { BeliefTracker } from './belief/tracker.js';
 import { playFixture } from './demo/fixture-ink.js';
-import { REPO_ROOT, requireEnv } from './env.js';
+import { CONTACTS_FILE, requireEnv } from './env.js';
 import { createDroidExecutor } from './executor/droid-executor.js';
 import { Speculator } from './executor/speculator.js';
 import type { Emit } from './executor/types.js';
@@ -34,12 +33,7 @@ async function main(): Promise<void> {
   }
   const apiKey = requireEnv('CARTESIA_API_KEY');
 
-  // IMPORT_GOOGLE=1: real contacts from pnpm import:google replace the seed.
-  const contactsFile =
-    process.env.IMPORT_GOOGLE === '1'
-      ? path.join(REPO_ROOT, 'data', 'google', 'contacts.json')
-      : path.join(REPO_ROOT, 'workspace-seed', 'contacts.json');
-  const { contacts } = JSON.parse(readFileSync(contactsFile, 'utf8')) as { contacts: { name: string }[] };
+  const { contacts } = JSON.parse(readFileSync(CONTACTS_FILE, 'utf8')) as { contacts: { name: string }[] };
 
   // Warm-up before listening: the first utterance must not pay for cold starts.
   const moss = await MossIndex.load(undefined, { memory: true });
@@ -149,6 +143,7 @@ async function main(): Promise<void> {
       mic: LIVE_INK,
       memory: moss.memory,
       retrieval: retriever,
+      upcoming: (text, todayIso) => moss.upcoming(text, todayIso),
     });
     let tornDown = false;
     const teardown = (): void => {

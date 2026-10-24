@@ -9,7 +9,8 @@ type Call = { name: string; args: unknown[] };
 type Opts = {
   tracker?: boolean;
   demo?: boolean;
-  answer?: (q: string, hits: MossHit[]) => Promise<string>;
+  answer?: (q: string, hits: MossHit[], today?: Date) => Promise<string>;
+  upcoming?: (text: string, todayIso: string) => Promise<MossHit[]>;
   /** Belief returned by tracker.onTurnEnd, per turn. */
   finalBelief?: (turnId: string) => Belief;
   /** When true, tracker.onTurnEnd also emits the final belief as a belief_update (like the real tracker). */
@@ -93,6 +94,7 @@ function setup(opts: Opts = {}) {
     confirmWindowMs: opts.confirmWindowMs ?? 10_000,
     memory: opts.memory ? { add: async (d) => void mem.push(d) } : null,
     retrieval: opts.retrieval ?? null,
+    upcoming: opts.upcoming ?? null,
   });
   const names = () => calls.map((c) => c.name);
   const specTypes = () => specEvents.map((e) => `${e.type}:${'turnId' in e ? e.turnId : ''}`);
@@ -217,6 +219,27 @@ test("lookup final belief speaks the answerer's answer", async () => {
   assert.deepEqual(s.spoken, [{ text: 'Your meeting is at two.', opts: { interrupt: false, turnId: 't1' } }]);
 });
 
+test('lookup puts upcoming calendar hits first, without duplicates, and passes today', async () => {
+  let asked: { hits: string[]; today?: Date } | null = null;
+  let upcomingFor: [string, string] | null = null;
+  const s = setup({
+    finalBelief: () => ({ ...belief('lookup'), topHits: [{ docId: 'past', score: 0.9, snippet: 'Oct 5' }, { docId: 'next', score: 0.5, snippet: 'Oct 26' }] }),
+    upcoming: async (text, todayIso) => {
+      upcomingFor = [text, todayIso];
+      return [{ docId: 'next', score: 0.4, snippet: 'Oct 26' }];
+    },
+    answer: async (_q, hits, today) => {
+      asked = { hits: hits.map((h) => h.docId), today };
+      return 'Monday at 11:59 PM.';
+    },
+  });
+  utter(s, 't1', 'When is my homework due?');
+  await settle();
+  assert.deepEqual(upcomingFor, ['When is my homework due?', '2026-10-24']);
+  assert.deepEqual(asked!.hits, ['next', 'past']);
+  assert.equal(asked!.today?.getDate(), 24);
+});
+
 test('answerer rejecting speaks the fallback and sends an llm error', async () => {
   const s = setup({ finalBelief: () => belief('lookup'), answer: async () => Promise.reject(new Error('529')) });
   utter(s, 't1', 'When is my meeting?');
@@ -337,7 +360,7 @@ test('demo_control start calls demo.start with the fixture', () => {
   s.orch.onClient({ type: 'demo_control', action: 'stop' });
   assert.deepEqual(
     s.calls.map((c) => [c.name, ...c.args]),
-    [['demo.start', 'demo-utterance-2'], ['demo.start', 'demo-utterance-1'], ['demo.stop']],
+    [['demo.start', 'demo-utterance-2'], ['demo.start', 'demo-real-1'], ['demo.stop']],
   );
   s.orch.onClient({ type: 'demo_control', action: 'reset' });
   assert.ok(s.ws.some((e) => e.type === 'error' && e.source === 'demo'));

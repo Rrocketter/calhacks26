@@ -29,3 +29,9 @@ function resolveWorkspace(): string {
   return path.join(realpathSync.native(cur), ...rest);
 }
 export const WORKSPACE_DIR = resolveWorkspace();
+
+/** IMPORT_GOOGLE=1: real contacts from pnpm import:google replace the seed (same switch as reset:workspace). */
+export const CONTACTS_FILE =
+  process.env.IMPORT_GOOGLE === '1'
+    ? path.join(REPO_ROOT, 'data', 'google', 'contacts.json')
+    : path.join(REPO_ROOT, 'workspace-seed', 'contacts.json');
