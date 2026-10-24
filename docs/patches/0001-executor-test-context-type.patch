@@ -1,0 +1,40 @@
+diff --git a/apps/server/src/executor/droid-executor.test.ts b/apps/server/src/executor/droid-executor.test.ts
+index a3a501b..b3b479e 100644
+--- a/apps/server/src/executor/droid-executor.test.ts
++++ b/apps/server/src/executor/droid-executor.test.ts
+@@ -1,4 +1,4 @@
+-import { test } from 'node:test';
++import { test , type TestContext } from 'node:test';
+ import assert from 'node:assert/strict';
+ import { execFileSync } from 'node:child_process';
+ import fs from 'node:fs';
+@@ -19,7 +19,8 @@ test.after(() => {
+   for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
+ });
+ test.beforeEach((t) => {
+-  t.mock.method(console, 'log', () => undefined);
++  const tc = t as TestContext;
++  tc.mock.method(console, 'log', () => undefined);
+ });
+ 
+ const cleanEnv = () => {
+diff --git a/apps/server/src/executor/turn.test.ts b/apps/server/src/executor/turn.test.ts
+index c7d6396..c89d050 100644
+--- a/apps/server/src/executor/turn.test.ts
++++ b/apps/server/src/executor/turn.test.ts
+@@ -1,4 +1,4 @@
+-import { test } from 'node:test';
++import { test , type TestContext } from 'node:test';
+ import assert from 'node:assert/strict';
+ import fs from 'node:fs';
+ import os from 'node:os';
+@@ -17,7 +17,8 @@ const guard = makeGuard(ws);
+ test.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+ // The runner logs tool names and paths; keep test output clean.
+ test.beforeEach((t) => {
+-  t.mock.method(console, 'log', () => undefined);
++  const tc = t as TestContext;
++  tc.mock.method(console, 'log', () => undefined);
+ });
+ 
+ const ev = (e: Record<string, unknown>): DroidStreamEvent => e as unknown as DroidStreamEvent;

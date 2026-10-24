@@ -70,6 +70,20 @@ Top hits:
 
 **Final verification run (Task 10):** createIndex 6618.6 ms, loadIndex 4401.4 ms (index already built earlier, model cached), warmup query 5.0 ms, query p50 2.0 ms, p95 2.2 ms, SDK `timeTakenInMs` 0 / 0. Same top hits as before.
 
+### ahead-corpus (Lane B)
+
+382 docs from `gen:corpus`, built by `pnpm --filter @ahead/server build:index` (createIndex 5499 ms, loadIndex 2427 ms warm). Query wall-clock p50 1.9 ms, p95 2.5 ms (20 queries, k=3).
+
+Top-3 by `alpha` (hybrid weight, lower = more keyword):
+
+| Query | 0.3 | 0.5 | 0.7 |
+| --- | --- | --- | --- |
+| draft a message to priya | `contact-priya` at 3 | not in top 3 (rank 4) | not in top 5 |
+| priya thursday | `evt-priya-q3` at 1 | `evt-priya-q3` at 1 | `evt-priya-q3` at 2 |
+| what time is my priya meeting | `evt-priya-q3` at 3 | `evt-priya-q3` at 3 | not in top 5 |
+
+`MossIndex` uses `alpha: 0.3`. The note `note-2026-10-20-q3-planning` often ranks first for Priya queries, so rely on rank within top 3, not top 1.
+
 ### Index names (rule)
 
 - The free plan allows 3 indexes total.
@@ -340,3 +354,50 @@ Experiments: `SPIKE_READ_POLICY=list` gave the same canary result as `home` (all
 ### Lane A live measurements
 
 To fill in after the spoken test: partial cadence, client TTFA (turn_end to first scheduled buffer), server `ttfa` metric, mic resume delay.
+## Anthropic (Haiku intent)
+
+`@anthropic-ai/sdk` 1.3.0 (exact pin) in `apps/server`, used by `HaikuIntentLlm` (`apps/server/src/belief/haiku.ts`). Request: `claude-haiku-5-5`, `max_tokens: 512`, `thinking: {type: 'disabled'}`, `output_config: {effort: 'low', format: {type: 'json_schema', schema}}`, no temperature/top_p, no tool_choice.
+
+- SDK 1.3.0 types already include `output_config` (`effort`, `format: JSONOutputFormat`) and `ThinkingConfigDisabled`. No casts needed.
+- Structured output comes back as one `text` block holding the JSON. The schema uses `additionalProperties: false` and makes every field required; entities are sent as `[{key, value}]` and turned into a record after parsing.
+- Haiku returns the person as spoken (`"priya"`); the tracker maps it to the contact's full name.
+- It produces `claims` on its own when a context snippet contradicts the partial (it flagged `said: thursday, known: Friday, docId: evt-priya-q3`). Case is not consistent, so normalize before comparing.
+
+### Measured (2026-10-24, "draft a message to priya" plus 2 context snippets)
+
+- First call in a process: 2898 ms (includes TLS setup and probably schema compilation).
+- Next 6 calls: 1508 to 1626 ms (about 1.5 s steady state). Every call returned `draft_message` at confidence 0.9.
+- That is slower than the ~1 s we planned for. The Moss loop doesn't wait on it (calls are fire-and-forget, up to `MAX_LLM_IN_FLIGHT: 2` in flight per turn), but the lock lands about 1.5 s after the partial that triggered it. A warm-up call at startup would remove the cold-start cost.
+
+### Belief replay (Lane B)
+
+`pnpm --filter @ahead/server replay` plays `demo-utterance-1` in real time through the live tracker (real Moss `ahead-corpus` + Haiku), after a warm-up outside timing (`loadIndex` + one query, one Haiku call). Measured 2026-10-24, 8 runs:
+
+- Moss: 50 queries per turn (1 to 5 per partial). Per-query wall time inside the replay p50 7.4 to 15.8 ms, p95 17 to 31 ms. That is higher than the 2 ms measured with serial queries, because the tracker fires one partial's queries with `Promise.all` and each one's wall time includes waiting on the others. Still far under the 250 ms gap between partials.
+- Haiku streaming calls: mostly 0.9 to 1.9 s, with outliers of 4.2 to 5.4 s (3 of about 50 calls). The first trigger is partial #1 ("Draft a message", +1.25 s), so the lock lands at +2.7 to +3.2 s.
+- Without the "rate the intent only" prompt rule, Haiku rated "Draft a message" at 0.6 every time (fused 0.76: locks, but below `INTERJECT_AT`). With it: 0.9. Runs 1 to 4 (old prompt): 2 PASS, 2 FAIL (fused 0.76). Runs 5 to 8 (new prompt): 3 PASS, 1 FAIL.
+- Passing runs: lock +2.68 to +2.98 s, interject +3.03 to +3.05 s on the "Thursday" partial (+3.01 s), so the interject comes 15 to 35 ms after that partial arrives.
+- Before the trigger change below, the demo needed the first Haiku call to return within about 1.75 s. Run 5 took 1.84 s: the lock came 93 ms after the Thursday partial and the interject still fired on that partial, but the strict verdict counts it as FAIL.
+
+After the tracker fixes (LLM call on the first changed partial, up to `MAX_LLM_IN_FLIGHT: 2` calls at once, no interject while finalized, `onEagerEnd` no longer waits for in-flight calls, fast `day`/`time` win over Haiku's): 6 runs, 6 PASS.
+
+- Lock +1.78 to +2.75 s (on partials #3 to #6), interject +3.03 to +3.05 s on the Thursday partial (+3.01 to +3.02 s). The first call now starts at +1.0 s on "Draft a" (Haiku: draft_message 0.9), so the lock no longer depends on a single call finishing in 1.75 s.
+- Haiku calls (including warm-up): 51 calls, 683 ms to 2255 ms, p50 1419 ms. 7 to 8 streaming calls plus 1 final call per turn (was 5 to 6).
+- Final belief arrives 1.15 to 1.66 s after `transcript_final` (one final Haiku call). Before the fix it was up to about 10 s, because the eager end waited for every in-flight call.
+- Moss: 50 queries per turn, p50 15 to 17 ms, p95 28 to 32 ms (concurrent wall time; the extra LLM traffic shares the event loop).
+
+#### Moss: sequential vs `Promise.all` (measured 2026-10-24)
+
+The tracker now logs Moss once per changed partial as `[moss] step X.Xms (N queries)`: the wall time of that partial's whole batch. `MossIndex.query` still logs each query as `[moss] query X.Xms`; the tracker no longer logs it a second time. `belief.latencyMs.moss` is that batch wall time (it used to be the max per-query time). The replay prints it per partial (`step`) and as `moss step` p50/p95 in the verdict.
+
+A/B with the stricter verdict, 3 runs each way (16 changed partials, 50 queries per turn):
+
+| | per-query p50 | per-query p95 | step p50 | step p95 | verdict |
+| --- | --- | --- | --- | --- | --- |
+| sequential (`for ... await`) | 4.6 to 5.7 ms | 18.1 to 21.1 ms | 20.8 to 25.6 ms | 35.1 to 36.7 ms | 3 PASS |
+| `Promise.all` | 9.9 to 17.0 ms | 23.8 to 30.5 ms | 16.7 to 26.9 ms | 26.4 to 33.9 ms | 3 PASS |
+
+- Step p50 is about the same either way. Step p95 is a few ms higher sequential. Both are far under the 250 ms gap between partials.
+- Sequential gives honest per-query numbers (each query's time is its own), so the tracker runs queries in sequence.
+- In sequential runs the first query of a step is usually the slowest (10 to 25 ms) and the rest take 2 to 6 ms. Hypothesis, not shown: the first query after an idle gap pays a warm-up cost, or shares the event loop with Haiku responses landing at the same time. The standalone spike measured about 2 ms per query with nothing else running.
+- The replay verdict now also requires: the lock lands before the Thursday partial arrives (not just attributed to an earlier partial), the interject lands before the next partial arrives, the lock is `draft_message` with person `Priya Shah`, and the interject text is exactly `Heads up, Priya's meeting is Friday, not Thursday. Say Friday?`.

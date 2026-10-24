@@ -7,16 +7,20 @@
     "build": "tsc -p tsconfig.build.json",
     "dev": "node --env-file=../../.env --import tsx src/index.ts",
     "lint": "eslint . && tsc --noEmit -p .",
-    "test": "node --import tsx --test scripts/spike-droid.guard.test.ts scripts/env.test.ts src/voice/*.test.ts",
+    "test": "node --import tsx --test scripts/*.test.ts src/*/*.test.ts",
+    "gen:corpus": "node --import tsx scripts/gen-corpus.ts",
+    "build:index": "MOSS_DISABLE_TELEMETRY=1 node --env-file=../../.env --import tsx scripts/build-index.ts",
+    "replay": "MOSS_DISABLE_TELEMETRY=1 node --env-file=../../.env --import tsx scripts/replay.ts",
     "spike:ink": "node --env-file=../../.env --import tsx scripts/spike-ink.ts",
     "spike:sonic": "node --env-file=../../.env --import tsx scripts/spike-sonic.ts",
     "spike:moss": "MOSS_DISABLE_TELEMETRY=1 node --env-file=../../.env --import tsx scripts/spike-moss.ts",
-    "smoke:sonic-ws": "node --env-file=../../.env --import tsx scripts/smoke-sonic-ws.ts",
     "spike:droid": "node --env-file=../../.env --import tsx scripts/spike-droid.ts",
+    "smoke:sonic-ws": "node --env-file=../../.env --import tsx scripts/smoke-sonic-ws.ts",
     "smoke:voice": "node --import tsx scripts/smoke-voice.ts"
   },
   "dependencies": {
     "@ahead/contracts": "workspace:*",
+    "@anthropic-ai/sdk": "1.3.0",
     "@factory/droid-sdk": "0.10.0",
     "@moss-js/moss": "1.21.0",
     "ws": "8.22.0"
