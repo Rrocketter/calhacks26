@@ -325,4 +325,11 @@ Experiments: `SPIKE_READ_POLICY=list` gave the same canary result as `home` (all
 - Haiku streaming calls: mostly 0.9 to 1.9 s, with outliers of 4.2 to 5.4 s (3 of about 50 calls). The first trigger is partial #1 ("Draft a message", +1.25 s), so the lock lands at +2.7 to +3.2 s.
 - Without the "rate the intent only" prompt rule, Haiku rated "Draft a message" at 0.6 every time (fused 0.76: locks, but below `INTERJECT_AT`). With it: 0.9. Runs 1 to 4 (old prompt): 2 PASS, 2 FAIL (fused 0.76). Runs 5 to 8 (new prompt): 3 PASS, 1 FAIL.
 - Passing runs: lock +2.68 to +2.98 s, interject +3.03 to +3.05 s on the "Thursday" partial (+3.01 s), so the interject comes 15 to 35 ms after that partial arrives.
-- The demo needs the first Haiku call to return within about 1.75 s. Run 5 took 1.84 s: the lock came 93 ms after the Thursday partial and the interject still fired on that partial, but the strict verdict counts it as FAIL.
+- Before the trigger change below, the demo needed the first Haiku call to return within about 1.75 s. Run 5 took 1.84 s: the lock came 93 ms after the Thursday partial and the interject still fired on that partial, but the strict verdict counts it as FAIL.
+
+After the tracker fixes (LLM call on the first changed partial, up to `MAX_LLM_IN_FLIGHT: 2` calls at once, no interject while finalized, `onEagerEnd` no longer waits for in-flight calls, fast `day`/`time` win over Haiku's): 6 runs, 6 PASS.
+
+- Lock +1.78 to +2.75 s (on partials #3 to #6), interject +3.03 to +3.05 s on the Thursday partial (+3.01 to +3.02 s). The first call now starts at +1.0 s on "Draft a" (Haiku: draft_message 0.9), so the lock no longer depends on a single call finishing in 1.75 s.
+- Haiku calls (including warm-up): 51 calls, 683 ms to 2255 ms, p50 1419 ms. 7 to 8 streaming calls plus 1 final call per turn (was 5 to 6).
+- Final belief arrives 1.15 to 1.66 s after `transcript_final` (one final Haiku call). Before the fix it was up to about 10 s, because the eager end waited for every in-flight call.
+- Moss: 50 queries per turn, p50 15 to 17 ms, p95 28 to 32 ms (concurrent wall time; the extra LLM traffic shares the event loop).
