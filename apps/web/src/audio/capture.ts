@@ -1,5 +1,6 @@
 import type { ClientEvent } from '@ahead/contracts';
 import { bytesToBase64 } from './base64';
+import { micLevel } from './level';
 
 const SAMPLE_RATE = 16000;
 const CHUNK_SAMPLES = 1600; // 100 ms
@@ -28,6 +29,9 @@ export async function startCapture(onChunk: (ev: AudioChunk) => void): Promise<(
   let seq = 0;
   node.port.onmessage = (e: MessageEvent<Float32Array>) => {
     const f = e.data;
+    let sum = 0;
+    for (let i = 0; i < f.length; i++) sum += f[i]! * f[i]!;
+    micLevel.set(f.length ? Math.sqrt(sum / f.length) : 0);
     for (let i = 0; i < f.length; i++) {
       const s = Math.max(-1, Math.min(1, f[i]!));
       buf[filled++] = s < 0 ? s * 0x8000 : s * 0x7fff;
@@ -42,6 +46,7 @@ export async function startCapture(onChunk: (ev: AudioChunk) => void): Promise<(
 
   return () => {
     node.port.onmessage = null;
+    micLevel.set(0);
     source.disconnect();
     node.disconnect();
     stream.getTracks().forEach((t) => t.stop());
