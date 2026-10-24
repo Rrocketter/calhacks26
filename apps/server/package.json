@@ -7,7 +7,7 @@
     "build": "tsc -p tsconfig.build.json",
     "dev": "node --env-file=../../.env --import tsx src/index.ts",
     "lint": "eslint . && tsc --noEmit -p .",
-    "test": "node --import tsx --test scripts/*.test.ts src/*/*.test.ts",
+    "test": "node --import tsx --test scripts/*.test.ts src/*.test.ts src/*/*.test.ts",
     "gen:corpus": "node --import tsx scripts/gen-corpus.ts",
     "build:index": "MOSS_DISABLE_TELEMETRY=1 node --env-file=../../.env --import tsx scripts/build-index.ts",
     "replay": "MOSS_DISABLE_TELEMETRY=1 node --env-file=../../.env --import tsx scripts/replay.ts",
