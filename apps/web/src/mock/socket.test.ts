@@ -47,6 +47,16 @@ describe('MockSocket', () => {
     expect(evs).toContainEqual({ type: 'metric', source: 'sonic', label: 'ttfa', ms: 180 });
   });
 
+  it('holds the interject until the transcript shows its trigger word', async () => {
+    const evs = await replay({ ...FAST, beliefOffsetMs: 0 });
+    const inter = idx(evs, (e) => e.type === 'interject');
+    expect(inter).toBeGreaterThan(-1);
+    const partials = evs.slice(0, inter).filter((e) => e.type === 'transcript_partial');
+    const last = partials[partials.length - 1];
+    expect(last?.type === 'transcript_partial' && last.text).toContain('Thursday');
+    expect(evs.filter((e) => e.type === 'interject')).toHaveLength(1);
+  });
+
   it('surfaces one denied tool event', async () => {
     const evs = await replay({ ...FAST, denied: true });
     const tools = evs.filter((e) => e.type === 'droid_event' && e.kind === 'tool');

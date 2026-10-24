@@ -3,11 +3,13 @@ import { mockBeliefStream, mockDroidRun, mockInkStream, type InkFixture } from '
 import fixture from '@ahead/contracts/mocks/fixtures/demo-utterance-1.json';
 import type { Transport } from '../transport';
 
-export type ReplayOpts = { speed?: number; denied?: boolean; failed?: boolean; autoConfirmMs?: number | null };
+export type ReplayOpts = { speed?: number; denied?: boolean; failed?: boolean; autoConfirmMs?: number | null; beliefOffsetMs?: number };
 
 // Belief timeline starts this long after turn_start so the Thursday interject lands between
 // the "Thursday" partial (3000 ms) and "at" (3250 ms).
 export const BELIEF_OFFSET_MS = 600;
+
+const norm = (t: string) => t.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 
 const SPECULATE_INTENTS = ['reschedule_event', 'draft_message', 'find_file', 'add_note'];
 
@@ -74,6 +76,17 @@ export class MockSocket implements Transport {
     let turnEnded = false;
     let autoConfirm: Promise<void> | null = null;
     const tasks: Promise<void>[] = [];
+    // The interject waits until the transcript shows the word it corrects.
+    let seen = '';
+    let finalSeen = false;
+    let held: ServerEvent | null = null;
+    let said: string | undefined;
+    const flushHeld = () => {
+      if (!held) return;
+      const e = held;
+      held = null;
+      this.emit(run, e);
+    };
 
     const maybeAutoConfirm = () => {
       const ms = this.opts.autoConfirmMs ?? null;
@@ -103,11 +116,16 @@ export class MockSocket implements Transport {
     };
 
     const belief = async () => {
-      await this.sleep(BELIEF_OFFSET_MS);
+      await this.sleep(this.opts.beliefOffsetMs ?? BELIEF_OFFSET_MS);
       let formed = false;
       let speculating = false;
       for await (const e of mockBeliefStream(turnId, { speed: this.speed })) {
         if (!live()) return;
+        if (e.type === 'belief_update') said = e.belief.claims[0]?.said;
+        if (e.type === 'interject' && said && !finalSeen && !` ${seen} `.includes(` ${norm(said)} `)) {
+          held = e;
+          continue;
+        }
         this.emit(run, e);
         if (e.type !== 'belief_update') continue;
         if (!formed) {
@@ -126,6 +144,13 @@ export class MockSocket implements Transport {
     for await (const e of mockInkStream(fixture as InkFixture, { speed: this.speed })) {
       if (!live()) return;
       this.emit(run, e);
+      if (e.type === 'transcript_partial') {
+        seen = norm(e.text);
+        if (held && said && ` ${seen} `.includes(` ${norm(said)} `)) flushHeld();
+      } else if (e.type === 'transcript_final') {
+        finalSeen = true;
+        flushHeld();
+      }
       if (e.type === 'turn_start') {
         this.state(run, turnId, 'LISTENING');
         tasks.push(belief());
