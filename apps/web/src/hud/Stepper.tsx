@@ -3,9 +3,21 @@ import type { HudState } from './state';
 
 const SLOTS: State[][] = [['LISTENING'], ['BELIEF_FORMING'], ['SPECULATING'], ['STAGED'], ['COMMITTED', 'ROLLED_BACK']];
 
-const label = (s: State) => s.replace(/_/g, ' ');
+export type View = 'product' | 'engineering';
 
-export function Stepper({ hud }: { hud: HudState }) {
+// Product mode names each state in plain words.
+export const PLAIN_STATE: Record<State, string> = {
+  LISTENING: 'Listening',
+  BELIEF_FORMING: 'Understanding',
+  SPECULATING: 'Preparing',
+  STAGED: 'Ready',
+  COMMITTED: 'Applied',
+  ROLLED_BACK: 'Discarded',
+};
+
+export const stateLabel = (s: State, view: View) => (view === 'product' ? PLAIN_STATE[s] : s.replace(/_/g, ' '));
+
+export function Stepper({ hud, view }: { hud: HudState; view: View }) {
   const current = SLOTS.findIndex((slot) => slot.includes(hud.state));
   return (
     <ol className="stepper">
@@ -31,7 +43,7 @@ export function Stepper({ hud }: { hud: HudState }) {
             <span className="dot" />
             <span className="step-label">
               {shown.map((s) => (
-                <span key={s}>{label(s)}</span>
+                <span key={s}>{stateLabel(s, view)}</span>
               ))}
             </span>
           </li>

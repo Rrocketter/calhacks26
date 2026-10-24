@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import type { Belief } from '@ahead/contracts';
-import { words, type HudState } from './state';
+import { words, type HudState, type Interject, type Reply } from './state';
 import { ghostOpacity, ghostParts } from './ghost';
 
 // Keyed by index and text, so new words and Ink's rewrites ("two" → "2") animate in, the rest stay put.
@@ -84,6 +84,25 @@ function Ghost({ belief }: { belief: Belief }) {
   );
 }
 
+// What AHEAD said for a turn, captioned under it so nothing spoken is lost in a noisy room.
+// An interject still on screen as the callout is not repeated.
+function Captions({ replies, turnId, callout }: { replies: Reply[]; turnId: string; callout: Interject | null }) {
+  const shown = replies.filter(
+    (r) => r.turnId === turnId && !(r.kind === 'interject' && callout?.turnId === turnId && callout.text === r.text),
+  );
+  if (shown.length === 0) return null;
+  return (
+    <div className="captions">
+      {shown.map((r, i) => (
+        <div className={`caption ${r.kind}`} key={`${i}:${r.text}`}>
+          <span className="caption-who">AHEAD</span>
+          {r.text}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // The reducer keeps the last belief across turns; only one that arrived during this turn counts.
 function useTurnBelief(turnId: string | null, belief: Belief | null): Belief | null {
   const [seen, setSeen] = useState({ turnId, stale: belief });
@@ -120,6 +139,7 @@ export function Transcript({ hud, error }: { hud: HudState; error: string | null
           {older.map((f, i) => (
             <div key={`${f.turnId}-${i}`}>
               <Words text={f.text} highlight={f.highlight} />
+              <Captions replies={hud.replies} turnId={f.turnId} callout={null} />
             </div>
           ))}
         </div>
@@ -143,6 +163,7 @@ export function Transcript({ hud, error }: { hud: HudState; error: string | null
         )
       )}
       {!open && !current && callout}
+      {turnId !== null && (open || current) && <Captions replies={hud.replies} turnId={turnId} callout={interject} />}
     </section>
   );
 }

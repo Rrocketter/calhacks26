@@ -6,7 +6,7 @@ type Props = { hud: HudState; target: ConfirmTarget; onAnswer(apply: boolean): v
 const APPLY_KEYS = new Set(['y', 'Y', 'Enter']);
 const DISCARD_KEYS = new Set(['n', 'N', 'Escape']);
 
-function typing(el: EventTarget | null): boolean {
+export function typing(el: EventTarget | null): boolean {
   return el instanceof HTMLElement && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName));
 }
 

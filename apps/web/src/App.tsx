@@ -7,7 +7,8 @@ import { TopBar } from './hud/TopBar';
 import { Transcript } from './hud/Transcript';
 import { BeliefPanel } from './hud/BeliefPanel';
 import { ExecutorPanel } from './hud/ExecutorPanel';
-import { ConfirmCard } from './hud/ConfirmCard';
+import { ConfirmCard, typing } from './hud/ConfirmCard';
+import type { View } from './hud/Stepper';
 
 const params = new URLSearchParams(location.search);
 const mode: 'live' | 'mock' = params.get('mock') === '1' ? 'mock' : 'live';
@@ -23,6 +24,18 @@ export function App() {
   const stopping = useRef(false); // Stop pressed: the close that follows is not an error
   // The confirm target already answered by click or key: the first answer wins, the card hides.
   const [answered, setAnswered] = useState<string | null>(null);
+  const [view, setView] = useState<View>('product');
+
+  // D flips Product / Engineering; Y, N, Enter and Esc stay with the confirm card.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.repeat || e.metaKey || e.ctrlKey || e.altKey || typing(e.target)) return;
+      if (e.key !== 'd' && e.key !== 'D') return;
+      setView((v) => (v === 'product' ? 'engineering' : 'product'));
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   useEffect(
     () => () => {
@@ -99,7 +112,7 @@ export function App() {
 
   return (
     // data-state drives the ambient hue (LISTENING cool, SPECULATING / STAGED accent, outcome green / red).
-    <div className="hud" data-state={hud.state}>
+    <div className="hud" data-state={hud.state} data-view={view}>
       <TopBar
         hud={hud}
         mode={mode}
@@ -112,10 +125,12 @@ export function App() {
         }}
         onDemo={demo}
         onRetrieval={(m) => transport.current?.send({ type: 'retrieval_mode', mode: m })}
+        view={view}
+        onView={setView}
       />
       <Transcript hud={hud} error={hud.error ?? startError} />
-      <BeliefPanel hud={hud} />
-      <ExecutorPanel hud={hud} canSend={running || mode === 'mock'} onConfirm={confirm} />
+      <BeliefPanel hud={hud} view={view} />
+      <ExecutorPanel hud={hud} view={view} canSend={running || mode === 'mock'} onConfirm={confirm} />
       {target && targetKey !== answered && (
         <ConfirmCard key={targetKey} hud={hud} target={target} onAnswer={(apply) => answer(target, apply)} />
       )}

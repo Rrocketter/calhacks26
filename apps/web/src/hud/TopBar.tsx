@@ -1,6 +1,7 @@
 import { CLOUD_SIM_MS, RETRIEVAL_MODES, type RetrievalMode } from '@ahead/contracts';
 import { pendingConfirm, type HudState } from './state';
 import { LevelMeter, Tween } from './motion';
+import { stateLabel, type View } from './Stepper';
 
 type Props = {
   hud: HudState;
@@ -11,6 +12,8 @@ type Props = {
   onStop(): void;
   onDemo(): void;
   onRetrieval(mode: RetrievalMode): void;
+  view: View;
+  onView(view: View): void;
 };
 
 type CounterProps = { label: string; short: string; value: number | null; digits?: number; unit?: string };
@@ -58,7 +61,25 @@ function RetrievalToggle({ hud, enabled, onPick }: { hud: HudState; enabled: boo
   );
 }
 
-export function TopBar({ hud, mode, running, starting, onStart, onStop, onDemo, onRetrieval }: Props) {
+/** Product (plain words, the result as the real thing) or Engineering (every internal). D toggles. */
+function ViewSwitch({ view, onView }: { view: View; onView(v: View): void }) {
+  return (
+    <div className="view-switch" role="group" aria-label="View">
+      <span className="label">
+        View <kbd>D</kbd>
+      </span>
+      <div className="seg">
+        {(['product', 'engineering'] as const).map((v) => (
+          <button key={v} className={view === v ? 'seg-btn on' : 'seg-btn'} aria-pressed={view === v} onClick={() => onView(v)}>
+            {v === 'product' ? 'Product' : 'Engineering'}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function TopBar({ hud, mode, running, starting, onStart, onStop, onDemo, onRetrieval, view, onView }: Props) {
   const { count, totalMs } = hud.moss;
   const avg = count ? totalMs / count : null;
   const ttfa = hud.ttfa.client ?? hud.ttfa.server;
@@ -79,9 +100,9 @@ export function TopBar({ hud, mode, running, starting, onStart, onStop, onDemo, 
           Listening for yes / no
         </span>
       ) : (
-        <span className="state-pill num" key={hud.state}>
+        <span className="state-pill num" key={`${hud.state}:${view}`}>
           <span className="state-dot" />
-          {hud.state.replace(/_/g, ' ')}
+          {stateLabel(hud.state, view)}
         </span>
       )}
       <div className="counters">
@@ -91,6 +112,7 @@ export function TopBar({ hud, mode, running, starting, onStart, onStop, onDemo, 
       </div>
       <RetrievalToggle hud={hud} enabled={mode === 'live' && running} onPick={onRetrieval} />
       <span className="spacer" />
+      <ViewSwitch view={view} onView={onView} />
       {mode === 'live' && running && <LevelMeter />}
       <div className="controls">
         {mode === 'live' && (
