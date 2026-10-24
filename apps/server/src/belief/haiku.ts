@@ -6,7 +6,7 @@ import type { IntentLlm, IntentResult } from './types.js';
 
 export const HAIKU_MODEL = 'claude-haiku-5-5';
 
-const SYSTEM = `You classify what a user wants from a partial, still-being-spoken voice transcript.
+export const SYSTEM = `You classify what a user wants from a partial, still-being-spoken voice transcript.
 Pick exactly one intent:
 - reschedule_event: move or change the time/day of a calendar event
 - draft_message: write a message, email, or text to someone
@@ -18,7 +18,7 @@ The transcript may be cut off mid-sentence. Use the numbered context documents (
 Return:
 - entities: key/value pairs you can extract (keys such as person, day, time, file, topic). Use the person's name as spoken.
 - claims: only when the user states a fact that a context document contradicts. field is what is wrong (e.g. day, time), said is what the user said, known is what the document says, docId is that document's id. Otherwise an empty list.
-- confidence: 0 to 1, how sure you are of the intent given the partial so far.`;
+- confidence: 0 to 1, how sure you are of the intent given the partial so far. Rate the intent only, not whether entities are complete: if the words so far already name the action (e.g. "draft a message", "move my meeting", "find the"), use 0.85 or higher even if the person, day, or file is still missing.`;
 
 const SCHEMA = {
   type: 'object',
