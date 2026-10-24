@@ -1,4 +1,4 @@
-import { test } from 'node:test';
+import { test , type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -19,7 +19,8 @@ test.after(() => {
   for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
 });
 test.beforeEach((t) => {
-  t.mock.method(console, 'log', () => undefined);
+  const tc = t as TestContext;
+  tc.mock.method(console, 'log', () => undefined);
 });
 
 const cleanEnv = () => {

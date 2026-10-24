@@ -1,4 +1,4 @@
-import { test } from 'node:test';
+import { test , type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -17,7 +17,8 @@ const guard = makeGuard(ws);
 test.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 // The runner logs tool names and paths; keep test output clean.
 test.beforeEach((t) => {
-  t.mock.method(console, 'log', () => undefined);
+  const tc = t as TestContext;
+  tc.mock.method(console, 'log', () => undefined);
 });
 
 const ev = (e: Record<string, unknown>): DroidStreamEvent => e as unknown as DroidStreamEvent;
