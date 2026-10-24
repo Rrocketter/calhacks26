@@ -135,6 +135,7 @@ export class BeliefTracker {
     const gen = st.resumeGen;
     void this.onUpdate(turnId, text);
     const step = st.chain.then(async () => {
+      if (this.isEnded(turnId, st)) return;
       await this.idle();
       if (st.resumeGen === gen && this.turns.get(turnId) === st) st.finalized = true;
     });
@@ -166,6 +167,7 @@ export class BeliefTracker {
   }
 
   private async doTurnEnd(turnId: string, st: TurnState, finalText: string): Promise<Belief> {
+    if (this.isEnded(turnId, st)) return st.belief ?? unknownBelief(); // duplicate turn end
     st.ending = true;
     st.llmPending = false;
     const seq = st.nextSeq++;
@@ -224,7 +226,13 @@ export class BeliefTracker {
     return st;
   }
 
+  /** True once onTurnEnd has started for this state, or the state was replaced/deleted. */
+  private isEnded(turnId: string, st: TurnState): boolean {
+    return st.ending || this.turns.get(turnId) !== st;
+  }
+
   private async doUpdate(turnId: string, st: TurnState, text: string): Promise<void> {
+    if (this.isEnded(turnId, st)) return;
     const norm = normalize(text);
     if (norm === st.normText) return;
     st.rawText = text;
@@ -449,7 +457,7 @@ export class BeliefTracker {
    * claim on the belief and returns the interject text. Max one per turn.
    */
   private checkContradiction(st: TurnState, belief: Belief): string | undefined {
-    if (st.interjectClaim) return undefined;
+    if (st.interjectClaim || st.ending) return undefined; // never interject after the user stopped
     if (!st.locked || belief.confidence < this.cfg.INTERJECT_AT) return undefined;
     const fast = this.fastClaim(st);
     const candidates = [...belief.claims, ...(fast ? [fast] : [])];

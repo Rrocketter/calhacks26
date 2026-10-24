@@ -637,3 +637,62 @@ test('unknown turn is ignored', async () => {
   assert.equal(tracker.isFinalized('nope'), false);
   assert.ok(parseServerEvent(JSON.stringify({ type: 'belief_update', turnId: 'nope', belief: b })));
 });
+
+test('no interject after the user stopped (turn end)', async () => {
+  const llm = new InstantLlm(LOCKED_DRAFT);
+  const retriever = new SameHitsRetriever([PRIYA_EVT, PRIYA_CONTACT]);
+  const { tracker, events } = setup({ llm, retriever });
+  await tracker.onUpdate('t1', 'draft a message to priya');
+  await tracker.idle();
+  assert.equal(tracker.isLocked('t1'), true);
+  assert.equal(ofType(events, 'interject').length, 0);
+  // contradiction only appears in the final text
+  const b = await tracker.onTurnEnd('t1', 'draft a message to priya saying i will see her thursday');
+  assert.equal(b.intent, 'draft_message');
+  assert.equal(ofType(events, 'interject').length, 0);
+});
+
+test('updates and eager end queued after turn end are ignored', async () => {
+  const llm = new FakeLlm();
+  const { tracker, events, retriever } = setup({ llm });
+  await tracker.onUpdate('t1', 'draft a message to priya'); // streaming call 0
+  llm.resolve(0, LOCKED_DRAFT);
+  await tracker.idle();
+  const eventsBefore = events.length;
+  const queriesBefore = (retriever as FakeRetriever).calls.length;
+  const p = tracker.onTurnEnd('t1', 'draft a message to priya saying hi');
+  const u = tracker.onUpdate('t1', 'draft a message to priya saying hi there');
+  const e = tracker.onEagerEnd('t1', 'draft a message to priya saying hi there again');
+  await tick();
+  const finals = () => llm.calls.filter((c) => c.final === true).length;
+  assert.equal(finals(), 1);
+  llm.resolve(llm.calls.length - 1, LOCKED_DRAFT);
+  const b = await p;
+  await Promise.all([u, e]);
+  await tracker.idle();
+  const last = events.at(-1)!;
+  assert.equal(last.type, 'belief_update');
+  assert.deepEqual(last.type === 'belief_update' && last.belief, b);
+  assert.equal(events.length, eventsBefore + 1, 'only the final belief_update after turn end');
+  assert.equal((retriever as FakeRetriever).calls.length, queriesBefore, 'no moss after turn end');
+  assert.equal(finals(), 1);
+  assert.equal(llm.calls.length, 2, 'no streaming call after turn end');
+  assert.equal(tracker.current('t1'), undefined);
+  assert.equal(tracker.isFinalized('t1'), false);
+});
+
+test('duplicate turn end makes one llm call', async () => {
+  const llm = new FakeLlm();
+  const { tracker, events } = setup({ llm });
+  await tracker.onUpdate('t1', 'draft');
+  const p1 = tracker.onTurnEnd('t1', 'draft a');
+  const p2 = tracker.onTurnEnd('t1', 'draft a');
+  await tick();
+  assert.equal(llm.calls.length, 1);
+  llm.resolve(0, LOCKED_DRAFT);
+  const [b1, b2] = await Promise.all([p1, p2]);
+  await tracker.idle();
+  assert.equal(llm.calls.length, 1);
+  assert.deepEqual(b2, b1);
+  assert.equal(ofType(events, 'belief_update').length, 2); // one streaming, one final
+});
