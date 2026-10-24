@@ -11,21 +11,25 @@ Other sections are added per spike. Numbers are measured output from the spike s
 - `createIndex` on an existing name throws "Index already exists", so list and delete first.
 - `loadIndex` must be called before `query` (no cloud fallback in 1.21.0).
 
-### Measured (10 docs, 20 timed queries, first run on this machine)
+### Measured (10 docs, 20 timed queries)
 
-| Step | Result |
-| --- | --- |
-| createIndex (upload + cloud build + poll) | 3820.6 ms |
-| loadIndex | 19866.4 ms |
-| warmup query | 2.1 ms |
-| query wall-clock p50 | 2.0 ms |
-| query wall-clock p95 | 2.4 ms |
-| SDK `timeTakenInMs` p50 / p95 | 0 / 0 (reported as whole ms, so sub-ms rounds to 0) |
+| Step | Cold (first run) | Warm (second run) |
+| --- | --- | --- |
+| createIndex (upload + cloud build + poll) | 3820.6 ms | 3326.3 ms |
+| loadIndex | 19866.4 ms | 2172.6 ms |
+| warmup query | 2.1 ms | 1.9 ms |
+| query wall-clock p50 | 2.0 ms | 1.9 ms |
+| query wall-clock p95 | 2.4 ms | 2.4 ms |
+| SDK `timeTakenInMs` p50 / p95 | 0 / 0 | 0 / 0 |
+
+SDK `timeTakenInMs` is integer ms (sub-ms rounds to 0), so wall-clock around the call is the number to use.
+
+Model cache location: unknown. The 1.21.0 types only expose `cachePath` (optional, for persisting downloaded index data) on the load options, with no documented default. Where the embedding model is stored was not found in the SDK types. The cold-to-warm drop in loadIndex (19.9 s to 2.2 s) suggests something is cached between runs, but the location is not confirmed.
 
 Top hits:
 - "draft a message to Priya" -> `evt-priya-q3` (score 0.036)
 - "meeting with Priya Thursday" -> `evt-priya-q3` (score 0.351)
-- "q3 deck" -> `contact-priya` (score 1.000), not the file doc
+- "q3 deck" -> `contact-priya` (score 1.000), not the file doc. The contact doc text says "owns the Q3 deck review", so it matches "q3 deck" about as well as the file doc does; the file doc is not clearly the better semantic match.
 - "what time is my Priya meeting" -> `evt-priya-q3` (score 0.353)
 
 ### Quirks
