@@ -13,7 +13,8 @@
     "spike:droid": "node --env-file=../../.env --import tsx scripts/spike-droid.ts"
   },
   "dependencies": {
-    "@ahead/contracts": "workspace:*"
+    "@ahead/contracts": "workspace:*",
+    "@moss-js/moss": "1.21.0"
   },
   "devDependencies": {
     "@types/node": "20.19.43",
