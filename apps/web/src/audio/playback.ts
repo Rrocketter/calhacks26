@@ -11,6 +11,21 @@ export class PcmPlayer {
   private sources = new Set<AudioBufferSourceNode>();
   private nextStart = 0;
   private currentContext: string | null = null;
+  private stopped = new Set<string>(); // contexts cut by stopNow; their late chunks are dropped
+
+  /** Create and resume the AudioContext; call from a user gesture. */
+  prime(): void {
+    this.ensure();
+  }
+
+  close(): void {
+    this.stopNow();
+    this.sources.clear();
+    const ctx = this.ctx;
+    this.ctx = null;
+    this.gain = null;
+    ctx?.close().catch(() => {});
+  }
 
   private ensure(): { ctx: AudioContext; gain: GainNode } {
     if (!this.ctx || !this.gain) {
@@ -24,6 +39,7 @@ export class PcmPlayer {
 
   enqueue(contextId: string, pcmBase64: string, sampleRate: number): void {
     if (pcmBase64 === '') return; // the `done` chunk carries no audio
+    if (this.stopped.has(contextId)) return;
     const { ctx, gain } = this.ensure();
     const first = contextId !== this.currentContext;
     if (first) {
@@ -52,6 +68,11 @@ export class PcmPlayer {
   }
 
   stopNow(): void {
+    if (this.currentContext !== null) {
+      if (this.stopped.size >= 50) this.stopped.clear();
+      this.stopped.add(this.currentContext);
+    }
+    this.currentContext = null;
     if (!this.ctx || !this.gain) return;
     const t = this.ctx.currentTime;
     const gain = this.gain;
@@ -67,7 +88,6 @@ export class PcmPlayer {
     }
     this.sources.clear();
     this.nextStart = 0;
-    this.currentContext = null;
     gain.gain.setValueAtTime(1, t + RAMP_S + 0.001); // restore for the next context
   }
 }
