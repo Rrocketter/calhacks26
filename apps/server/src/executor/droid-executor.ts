@@ -15,6 +15,9 @@ import { makePermissionHandler, runTurn, type PermissionHandler } from './turn.j
 import { redact, SpeculationFailed, type DroidLike, type Emit, type Executor } from './types.js';
 
 const PHASE_TIMEOUT_MS = 180_000;
+// After a phase-timeout interrupt, how long the turn may take to end before the session is closed.
+const INTERRUPT_GRACE_MS = 5000;
+const OPEN_TIMEOUT_MS = 10_000;
 
 export type OpenSession = (handler: PermissionHandler, signal: AbortSignal) => Promise<DroidLike>;
 
@@ -27,6 +30,8 @@ export interface DroidExecutorOptions {
   now?: () => Date;
   // Per-phase limit on one runTurn (R21); default PHASE_TIMEOUT_MS. Idle warm time does not count.
   phaseTimeoutMs?: number;
+  interruptGraceMs?: number;
+  openTimeoutMs?: number;
 }
 
 interface Live {
@@ -112,18 +117,27 @@ export class DroidExecutor implements Executor {
   }
 
   // Runs one phase's turn under the per-phase timeout. On expiry it interrupts the turn, which then
-  // ends as a non-success outcome and goes through fail(), closing the session.
+  // ends as a non-success outcome and goes through fail(), closing the session. If the turn ignores
+  // the interrupt, close() after a grace period releases the SDK bridge and settles the parked next().
   private async timed<T>(s: DroidLike, label: string, run: () => Promise<T>): Promise<T> {
     const ms = this.opts.phaseTimeoutMs ?? PHASE_TIMEOUT_MS;
+    const graceMs = this.opts.interruptGraceMs ?? INTERRUPT_GRACE_MS;
+    let grace: NodeJS.Timeout | undefined;
     const timer = setTimeout(() => {
       console.log(`[droid] ${label} timeout after ${ms}ms, interrupting`);
       void s.interrupt().catch(() => undefined);
+      grace = setTimeout(() => {
+        console.log(`[droid] ${label} did not end ${graceMs}ms after interrupt, closing`);
+        void s.close().catch(() => undefined);
+      }, graceMs);
+      grace.unref();
     }, ms);
     timer.unref();
     try {
       return await run();
     } finally {
       clearTimeout(timer);
+      clearTimeout(grace);
     }
   }
 
@@ -152,15 +166,40 @@ export class DroidExecutor implements Executor {
   private async open(): Promise<void> {
     const ac = new AbortController();
     const t0 = performance.now();
+    const limit = this.opts.openTimeoutMs ?? OPEN_TIMEOUT_MS;
+    let timer: NodeJS.Timeout | undefined;
+    let timedOut = false;
+    const opening = this.opts.openSession(this.handler, ac.signal);
     try {
-      const s = await this.opts.openSession(this.handler, ac.signal);
+      const s = await Promise.race([
+        opening,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            timedOut = true;
+            reject(new Error(`createSession timeout after ${limit}ms`));
+          }, limit);
+        }),
+      ]);
       this.metric('createSession', performance.now() - t0);
       this.session = s;
       this.sessionAbort = ac;
     } catch (e) {
+      if (timedOut) {
+        ac.abort();
+        // A session that still arrives is never adopted.
+        opening.then(
+          (late) => {
+            console.log('[droid] createSession resolved after timeout, closing it');
+            return late.close();
+          },
+          () => undefined,
+        ).catch(() => undefined);
+      }
       const message = redact(e);
       console.log(`[droid] createSession failed msgLen=${message.length}`);
       this.opts.emit({ type: 'error', source: 'droid', message });
+    } finally {
+      clearTimeout(timer);
     }
   }
 

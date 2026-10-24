@@ -62,8 +62,8 @@ interface Factory {
   signals: AbortSignal[];
   // Phase 2 behaviour per call, in order; 'edit' once exhausted.
   phase2: Phase2Mode[];
-  // Phase 1 behaviour per call, in order; normal once exhausted.
-  phase1: 'block'[];
+  // Phase 1 behaviour per call, in order; normal once exhausted. deaf ignores interrupt, ends only on close.
+  phase1: ('block' | 'deaf')[];
   // Awaited by the early modes after the write's ToolResult, before the Result.
   afterWrite: () => Promise<void>;
   // Called by the early modes just before the write's ToolResult is yielded.
@@ -111,6 +111,8 @@ function factory(root: string, opts: { fail?: string } = {}): Factory {
     const calls: string[] = [];
     let active = false;
     let onInterrupt: () => void = () => undefined;
+    let onClose: () => void = () => undefined;
+    const closed = new Promise<void>((r) => (onClose = r));
     const s: FakeSession = {
       prompts,
       calls,
@@ -119,9 +121,14 @@ function factory(root: string, opts: { fail?: string } = {}): Factory {
         active = true;
         prompts.push(prompt);
         const isPhase2 = prompt.includes('Today is');
-        const mode: Phase2Mode = isPhase2 ? (f.phase2.shift() ?? 'edit') : (f.phase1.shift() ?? 'edit');
+        const mode: Phase2Mode | 'deaf' = isPhase2 ? (f.phase2.shift() ?? 'edit') : (f.phase1.shift() ?? 'edit');
         return (async function* () {
           try {
+            if (mode === 'deaf') {
+              started();
+              await closed;
+              return;
+            }
             if (!isPhase2 && mode !== 'block') {
               yield call('1', 'Read', { file_path: 'calendar.json' });
               yield result('success');
@@ -174,6 +181,7 @@ function factory(root: string, opts: { fail?: string } = {}): Factory {
       },
       async close() {
         calls.push('close');
+        onClose();
       },
     };
     f.sessions.push(s);
@@ -191,7 +199,7 @@ const belief = (intent: Belief['intent'] = 'reschedule_event'): Belief => ({
   latencyMs: { moss: 1 },
 });
 
-function setup(opts: { fail?: string; phaseTimeoutMs?: number } = {}) {
+function setup(opts: { fail?: string; phaseTimeoutMs?: number; interruptGraceMs?: number; openTimeoutMs?: number } = {}) {
   const ws = makeWorkspace();
   const f = factory(ws.root, opts);
   const events: ServerEvent[] = [];
@@ -202,6 +210,8 @@ function setup(opts: { fail?: string; phaseTimeoutMs?: number } = {}) {
     graceMs: 50,
     now: () => new Date('2026-10-24T19:00:00Z'),
     ...(opts.phaseTimeoutMs === undefined ? {} : { phaseTimeoutMs: opts.phaseTimeoutMs }),
+    ...(opts.interruptGraceMs === undefined ? {} : { interruptGraceMs: opts.interruptGraceMs }),
+    ...(opts.openTimeoutMs === undefined ? {} : { openTimeoutMs: opts.openTimeoutMs }),
   });
   return { ...ws, f, events, exec };
 }
@@ -669,4 +679,48 @@ test('early diff: a write result that arrives after rollback emits nothing', { t
   assert.equal(calendar(root), seedCalendar);
   assert.equal(await git.currentBranch(), 'main');
   assertValid(events);
+});
+
+test('phase1 that ignores interrupt is closed after the grace period; the chain is not wedged', { timeout: 5000 }, async () => {
+  const { f, events, exec } = setup({ phaseTimeoutMs: 50, interruptGraceMs: 50 });
+  f.phase1.push('deaf');
+  const t0 = performance.now();
+  await assert.rejects(keepAlive(exec.phase1('t1', belief())), SpeculationFailed);
+  const took = performance.now() - t0;
+  assert.ok(took < 1000, `took ${took}ms`);
+  assert.deepEqual(f.sessions[0]!.calls.slice(0, 2), ['interrupt', 'close']);
+  assert.equal(f.signals[0]!.aborted, true);
+  await exec.warm();
+  assert.equal(f.sessions.length, 2);
+  assertValid(events);
+});
+
+test('openSession that never resolves: warm emits an error, phase1 rejects within the open timeout', { timeout: 5000 }, async () => {
+  const { f, events, exec } = setup({ openTimeoutMs: 50 });
+  f.openGate = new Promise<void>(() => undefined);
+  await exec.warm();
+  const errs = events.filter((e) => e.type === 'error');
+  assert.equal(errs.length, 1);
+  assert.equal(f.signals[0]!.aborted, true);
+  const t0 = performance.now();
+  await assert.rejects(exec.phase1('t1', belief()), SpeculationFailed);
+  assert.ok(performance.now() - t0 < 1000);
+  assert.equal(f.signals[1]!.aborted, true);
+  assert.equal(f.sessions.length, 0);
+  assertValid(events);
+});
+
+test('openSession resolving after the open timeout: the late session is closed, not adopted', { timeout: 5000 }, async () => {
+  const { f, events, exec } = setup({ openTimeoutMs: 50 });
+  let release: () => void = () => undefined;
+  f.openGate = new Promise<void>((r) => (release = r));
+  await exec.warm();
+  assert.equal(events.filter((e) => e.type === 'error').length, 1);
+  release();
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(f.sessions.length, 1);
+  assert.deepEqual(f.sessions[0]!.calls, ['close']);
+  await exec.warm(); // not adopted: a fresh session opens
+  assert.equal(f.sessions.length, 2);
+  assert.deepEqual(f.sessions[1]!.calls, []);
 });
