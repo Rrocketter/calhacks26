@@ -465,3 +465,35 @@ Before/after: the diff used to reach the HUD 19.3 to 29.3 s after the belief loc
 | commit / rollback | 1846 | 1769 |
 
 `lock-to-staged` matches `lock-to-first-diff` to within 1 ms. In the rollback run, `STAGED` came 7.7 s before the turn ended.
+
+## Integration
+
+One `Orchestrator` per connection (`apps/server/src/orchestrator.ts`) routes VoiceSession, BeliefTracker and Speculator events per MERGE.md Step 2. Headless check: `DEMO_MODE=1 pnpm --filter @ahead/server dev`, then `pnpm --filter @ahead/server demo:run <fixture> --confirm=spoken|client|reject`. The driver plays the fixture through the live tracker, Moss, Haiku, Droid and Sonic. Only Ink is replaced. It answers the interject correction and the "Apply?" prompt, then checks the workspace `main`. Measured 2026-10-24, droid CLI v0.249.0, claude-haiku-5-5.
+
+**Startup (before listening):** Moss `loadIndex` 3.1 to 6.4 s, Haiku warm-up 1.6 to 2.2 s, Droid `createSession` 0.7 to 1.3 s.
+
+All times are from the fixture's `turn_start`. `merge done` runs from STAGED to the executor's `commit`/`rollback` metric. It includes the STAGED line playing and the 0.75 s spoken "Yes."/"No." fixture turn.
+
+| ms | utt 1 spoken (a) | utt 1 spoken (b) | utt 1 client | utt 2 spoken | utt 2 reject |
+|---|---|---|---|---|---|
+| lock | 2412 | 1969 | 2411 | 2434 | 2282 |
+| interject | 3042 | 3046 | 3054 | n/a | n/a |
+| first droid_event | 5824 | 6686 | 6246 | 7129 | 5649 |
+| STAGED | 24623 | 21830 | 18811 | 18050 | 25814 |
+| merge done after STAGED | n/a (driver bug, fixed) | 2774 | 1815 | 2910 | 3754 (rollback) |
+| result | main has Friday draft | PASS | PASS | PASS | PASS, main untouched |
+
+- Executor inside these runs: Phase 1 9.1 to 19.0 s, Phase 2 first diff 4.5 to 7.7 s, commit 1.36 to 1.69 s, rollback 1.66 s.
+- Utterance 1: the fixture turn ends at +4.95 s. Phase 2 waits for the correction answer (by design, see below), which the driver gives at about +5.5 s, so STAGED lands 13 to 20 s after the user stops. Phase 1 is still running when Phase 2 is queued; the executor serializes them.
+- Final Haiku belief after `turn_end`: 0.66 to 2.5 s (mostly 1.0 to 1.8 s).
+- Sonic first chunk for orchestrator speech: 75 to 300 ms with a warm socket. One STAGED line took 1254 ms and one took 1054 ms; both came after a long idle gap on the socket. Not investigated.
+- Lookup answers (`HaikuAnswerer`) were not exercised by these fixtures.
+
+**Live smoke (`smoke:voice`, real Ink + Sonic, no DEMO_MODE):** PASS. Interject at +4.0 s. Partials pause up to 4.9 s while the interject plays, because the mic is muted. Ink transcribed "Q3 deck" as "Q3 demo". Server Sonic TTFA 74.9 ms. Nobody answered "Say Friday?", so Phase 2 waited out the 8 s correction window and the STAGED line came 13.8 s after `turn_end`. The socket closing then rolled the staged draft back (1.6 s).
+
+### Behavior to know
+
+- **Interject correction:** after "Say Friday?", the correction is applied only on a spoken yes or `confirm_action {apply:true}` for that turn. No, or silence for 8 s after the turn ends, keeps what was said. Phase 2 does not start until then. A correction yes does not commit; STAGED still asks "Apply?".
+- **Spoken confirm:** while a STAGED turn waits, the next turn is held from the Speculator. "Yes."/"No." (and the variants in `reply.ts`) confirm. Anything else releases the hold, and the Speculator's own `turn_start` rolls the staged turn back.
+- **Utterance 2 loses "morning":** Phase 2 runs on the belief at `turn.eager_end`, which has `to_weekday: monday` but no time. `time: morning` only shows up in the final belief about 1.2 s after `turn_end`. The Droid kept 2 PM (`2026-10-26T14:00`).
+- **Drafts get a signature:** the Droid signed the utterance 1 draft "Thanks, Rahul" in one run, against the template's "do not invent facts".
