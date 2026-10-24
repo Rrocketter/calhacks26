@@ -316,3 +316,13 @@ Experiments: `SPIKE_READ_POLICY=list` gave the same canary result as `home` (all
 - First call in a process: 2898 ms (includes TLS setup and probably schema compilation).
 - Next 6 calls: 1508 to 1626 ms (about 1.5 s steady state). Every call returned `draft_message` at confidence 0.9.
 - That is slower than the ~1 s we planned for. The Moss loop doesn't wait on it (calls are fire-and-forget, one in flight per turn), but the lock lands about 1.5 s after the partial that triggered it. A warm-up call at startup would remove the cold-start cost.
+
+### Belief replay (Lane B)
+
+`pnpm --filter @ahead/server replay` plays `demo-utterance-1` in real time through the live tracker (real Moss `ahead-corpus` + Haiku), after a warm-up outside timing (`loadIndex` + one query, one Haiku call). Measured 2026-10-24, 8 runs:
+
+- Moss: 50 queries per turn (1 to 5 per partial). Per-query wall time inside the replay p50 7.4 to 15.8 ms, p95 17 to 31 ms. That is higher than the 2 ms measured with serial queries, because the tracker fires one partial's queries with `Promise.all` and each one's wall time includes waiting on the others. Still far under the 250 ms gap between partials.
+- Haiku streaming calls: mostly 0.9 to 1.9 s, with outliers of 4.2 to 5.4 s (3 of about 50 calls). The first trigger is partial #1 ("Draft a message", +1.25 s), so the lock lands at +2.7 to +3.2 s.
+- Without the "rate the intent only" prompt rule, Haiku rated "Draft a message" at 0.6 every time (fused 0.76: locks, but below `INTERJECT_AT`). With it: 0.9. Runs 1 to 4 (old prompt): 2 PASS, 2 FAIL (fused 0.76). Runs 5 to 8 (new prompt): 3 PASS, 1 FAIL.
+- Passing runs: lock +2.68 to +2.98 s, interject +3.03 to +3.05 s on the "Thursday" partial (+3.01 s), so the interject comes 15 to 35 ms after that partial arrives.
+- The demo needs the first Haiku call to return within about 1.75 s. Run 5 took 1.84 s: the lock came 93 ms after the Thursday partial and the interject still fired on that partial, but the strict verdict counts it as FAIL.
