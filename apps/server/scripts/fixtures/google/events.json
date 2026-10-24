@@ -1,0 +1,37 @@
+[
+  {
+    "id": "abc123",
+    "status": "confirmed",
+    "summary": "Design review with Lena",
+    "location": "Conference Room B",
+    "start": { "dateTime": "2026-10-30T14:00:00-07:00", "timeZone": "America/Los_Angeles" },
+    "end": { "dateTime": "2026-10-30T15:00:00-07:00", "timeZone": "America/Los_Angeles" },
+    "attendees": [
+      { "email": "me@example.com", "displayName": "Me Myself", "self": true },
+      { "email": "lena.okafor@example.com", "displayName": "Lena Okafor" },
+      { "email": "c_1888@resource.calendar.google.com", "displayName": "Room B", "resource": true }
+    ]
+  },
+  {
+    "id": "allday_1",
+    "status": "confirmed",
+    "summary": "Offsite",
+    "start": { "date": "2026-11-12" },
+    "end": { "date": "2026-11-13" }
+  },
+  {
+    "id": "gone_1",
+    "status": "cancelled",
+    "summary": "Cancelled sync",
+    "start": { "dateTime": "2026-10-28T09:00:00-07:00" },
+    "end": { "dateTime": "2026-10-28T09:30:00-07:00" }
+  },
+  {
+    "id": "nameless_1",
+    "status": "confirmed",
+    "location": "https://meet.google.com/abc-defg-hij call me at host@example.com",
+    "start": { "dateTime": "2026-10-27T10:00:00-07:00" },
+    "end": { "dateTime": "2026-10-27T10:30:00-07:00" },
+    "attendees": [{ "email": "hugo_haas2@example.com" }]
+  }
+]

@@ -4,8 +4,8 @@ import { pathToFileURL } from 'node:url';
 import { REPO_ROOT } from '../src/env.js';
 import type { CorpusDoc } from '../src/belief/types.js';
 
-type SeedEvent = { id: string; title: string; start: string; end: string; attendees: string[]; location: string };
-type SeedContact = { id: string; name: string; email: string; phone: string; notes: string };
+export type SeedEvent = { id: string; title: string; start: string; end: string; attendees: string[]; location: string };
+export type SeedContact = { id: string; name: string; email: string; phone: string; notes: string };
 
 const SEED = path.join(REPO_ROOT, 'workspace-seed');
 const OUT = path.join(REPO_ROOT, 'data', 'corpus', 'corpus.json');
@@ -58,14 +58,14 @@ function fullNames(title: string, attendees: string[]): string {
   return out;
 }
 
-function calendarDoc(e: SeedEvent): CorpusDoc {
+export function calendarDoc(e: SeedEvent): CorpusDoc {
   const s = wall(e.start);
   const day = weekday(s.y, s.mo, s.d);
   const title = fullNames(e.title, e.attendees);
   const who = e.attendees.length ? ` With ${e.attendees.join(', ')}.` : '';
   return {
     id: e.id,
-    text: `${title}. ${cap(day)}, ${MONTHS[s.mo - 1]} ${s.d} at ${clock(s.h, s.mi, true)} in ${e.location}.${who}`,
+    text: `${title}. ${cap(day)}, ${MONTHS[s.mo - 1]} ${s.d} at ${clock(s.h, s.mi, true)}${e.location ? ` in ${e.location}` : ''}.${who}`,
     metadata: {
       type: 'calendar',
       date: e.start.slice(0, 10),

@@ -1,0 +1,237 @@
+[
+  {
+    "id": "t1",
+    "messages": [
+      {
+        "id": "m1",
+        "internalDate": "1792684800000",
+        "snippet": "Hi! Here is the agenda",
+        "payload": {
+          "headers": [
+            {
+              "name": "Subject",
+              "value": "Agenda for Thursday"
+            },
+            {
+              "name": "From",
+              "value": "\"Okafor, Lena\" <lena.okafor@example.com>"
+            },
+            {
+              "name": "To",
+              "value": "Me Myself <me@example.com>"
+            }
+          ],
+          "mimeType": "multipart/mixed",
+          "parts": [
+            {
+              "mimeType": "multipart/alternative",
+              "parts": [
+                {
+                  "mimeType": "text/plain",
+                  "body": {
+                    "data": "SGkhIEhlcmUgaXMgdGhlIGFnZW5kYSBmb3IgVGh1cnNkYXkuIExvb3AgaW4gSHVnbyA8aHVnb19oYWFzMkBleGFtcGxlLmNvbT4gYW5kIHN0cmFuZ2VyQG90aGVyLm9yZywgZG9jIGF0IGh0dHBzOi8vZG9jcy5leGFtcGxlLmNvbS94P3Rva2VuPWFiYzEyMyB0aGFua3MuDQoNClBvaW50LiBQb2ludC4gUG9pbnQuIFBvaW50LiBQb2ludC4gUG9pbnQuIFBvaW50LiBQb2ludC4gUG9pbnQuIFBvaW50LiBQb2ludC4gUG9pbnQuIFBvaW50LiBQb2ludC4gUG9pbnQuIFBvaW50LiBQb2ludC4gUG9pbnQuIFBvaW50LiBQb2ludC4gUG9pbnQuIFBvaW50LiBQb2ludC4gUG9pbnQuIFBvaW50LiBQb2ludC4gUG9pbnQuIFBvaW50LiBQb2ludC4gUG9pbnQuIFBvaW50LiBQb2ludC4gUG9pbnQuIFBvaW50LiBQb2ludC4gUG9pbnQuIFBvaW50LiBQb2ludC4gUG9pbnQuIFBvaW50LiBQb2ludC4gUG9pbnQuIFBvaW50LiBQb2ludC4gUG9pbnQuIFBvaW50LiBQb2ludC4gUG9pbnQuIFBvaW50LiBQb2ludC4gUG9pbnQuIFBvaW50LiBQb2ludC4gUG9pbnQuIFBvaW50LiBQb2ludC4gUG9pbnQuIFBvaW50LiBQb2ludC4gUG9pbnQuIFBvaW50LiBQb2ludC4gUG9pbnQuIFBvaW50LiBQb2ludC4gUG9pbnQuIFBvaW50LiBQb2ludC4gUG9pbnQuIFBvaW50LiBQb2ludC4gUG9pbnQuIFBvaW50LiBQb2ludC4gUG9pbnQuIFBvaW50LiBQb2ludC4gUG9pbnQuIFBvaW50LiBQb2ludC4gUG9pbnQuIFBvaW50LiBQb2ludC4gUG9pbnQuIFBvaW50LiBQb2ludC4gUG9pbnQuIFBvaW50LiBQb2ludC4gUG9pbnQuIFBvaW50LiBQb2ludC4gUG9pbnQuIFBvaW50LiBQb2ludC4gUG9pbnQuIFBvaW50LiBQb2ludC4gUG9pbnQuIFBvaW50LiA"
+                  }
+                },
+                {
+                  "mimeType": "text/html",
+                  "body": {
+                    "data": "PHA-aWdub3JlZDwvcD4"
+                  }
+                }
+              ]
+            },
+            {
+              "mimeType": "application/pdf",
+              "filename": "agenda.pdf",
+              "body": {
+                "attachmentId": "att1",
+                "size": 1000
+              }
+            }
+          ]
+        }
+      },
+      {
+        "id": "m1b",
+        "internalDate": "1792688400000",
+        "snippet": "",
+        "payload": {
+          "headers": [
+            {
+              "name": "Subject",
+              "value": "Re: Agenda for Thursday"
+            },
+            {
+              "name": "From",
+              "value": "Me Myself <me@example.com>"
+            }
+          ],
+          "mimeType": "text/plain",
+          "body": {
+            "data": "cmVwbHkgdGV4dA"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "t2",
+    "messages": [
+      {
+        "id": "m2",
+        "internalDate": "1792576800000",
+        "snippet": "",
+        "payload": {
+          "headers": [
+            {
+              "name": "Subject",
+              "value": "Your Receipt from Cafe"
+            },
+            {
+              "name": "From",
+              "value": "Cafe <orders@cafe.example.com>"
+            }
+          ],
+          "mimeType": "text/plain",
+          "body": {
+            "data": "dG90YWwgNC41MA"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "t3",
+    "messages": [
+      {
+        "id": "m3",
+        "internalDate": "1792576800000",
+        "snippet": "",
+        "payload": {
+          "headers": [
+            {
+              "name": "Subject",
+              "value": "Password reset requested"
+            },
+            {
+              "name": "From",
+              "value": "Acct <security@example.com>"
+            }
+          ],
+          "mimeType": "text/plain",
+          "body": {
+            "data": "Y2xpY2s"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "t4",
+    "messages": [
+      {
+        "id": "m4",
+        "internalDate": "1792576800000",
+        "snippet": "",
+        "payload": {
+          "headers": [
+            {
+              "name": "Subject",
+              "value": "Your verification code is 123456"
+            },
+            {
+              "name": "From",
+              "value": "Acct <security@example.com>"
+            }
+          ],
+          "mimeType": "text/plain",
+          "body": {
+            "data": "MTIzNDU2"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "t5",
+    "messages": [
+      {
+        "id": "m5",
+        "internalDate": "1792576800000",
+        "snippet": "",
+        "payload": {
+          "headers": [
+            {
+              "name": "Subject",
+              "value": "Your October statement is ready"
+            },
+            {
+              "name": "From",
+              "value": "Bank <alerts@bank.example.com>"
+            }
+          ],
+          "mimeType": "text/plain",
+          "body": {
+            "data": "YmFsYW5jZQ"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "t6",
+    "messages": [
+      {
+        "id": "m6",
+        "internalDate": "1792521000000",
+        "snippet": "",
+        "payload": {
+          "headers": [
+            {
+              "name": "Subject",
+              "value": "News Weekly"
+            },
+            {
+              "name": "From",
+              "value": "News Weekly <noreply@news.example.com>"
+            }
+          ],
+          "mimeType": "text/html",
+          "body": {
+            "data": "PGh0bWw-PHN0eWxlPnB7Y29sb3I6cmVkfTwvc3R5bGU-PHA-SGVsbG8mbmJzcDs8Yj5yZWFkZXI8L2I-ICZhbXA7IGZyaWVuZHM8L3A-PC9odG1sPg"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "t7",
+    "messages": [
+      {
+        "id": "m7",
+        "internalDate": "1792440000000",
+        "snippet": "See you there",
+        "payload": {
+          "headers": [
+            {
+              "name": "Subject",
+              "value": "Lunch?"
+            },
+            {
+              "name": "From",
+              "value": "Me Myself <me@example.com>"
+            },
+            {
+              "name": "To",
+              "value": "hugo_haas2@example.com"
+            }
+          ],
+          "mimeType": "text/plain",
+          "body": {
+            "size": 0
+          }
+        }
+      }
+    ]
+  }
+]
