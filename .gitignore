@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+var/
+*.log
+.DS_Store
+data/corpus/*.json
+data/moss-index/
