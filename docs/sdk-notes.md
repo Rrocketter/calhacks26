@@ -79,3 +79,43 @@ Top hits:
 - Cancel: `{context_id, cancel:true}` only halts generation that has not started. For barge-in, also drop any incoming chunks for that `context_id` and flush browser playback.
 - Use a new `context_id` per reply.
 - These WebSocket details come from the docs and are untested live.
+
+## Cartesia Ink 2 (STT)
+
+Spike: `pnpm --filter @ahead/server spike:ink` streams `apps/server/scripts/fixtures/demo-utterance-1.wav` (made with macOS `say`, 16 kHz mono s16, 4.78 s) in real time.
+
+- Endpoint: `wss://api.cartesia.ai/stt/turns/websocket?model=ink-2&encoding=pcm_s16le&sample_rate=16000&cartesia_version=2026-08-14`.
+- Auth: header `X-API-Key` worked on the first try. No need for `Authorization: Bearer`.
+- Send raw PCM (no WAV header) as binary frames of 3200 bytes every 100 ms, then 2.5 s of zero frames, then text `{"type":"close"}`. The server flushes and closes with code 1000.
+- Ink 2 has no word-level partials. `turn.update` carries the cumulative transcript, which maps to our `transcript_partial` event.
+
+### Measured (one run, times relative to first audio byte)
+
+| Metric | Value |
+| --- | --- |
+| `connected` | +1 ms |
+| `turn.start` | +463 ms |
+| First `turn.update` | +1439 ms ("Draft a") |
+| Updates in turn | 17 |
+| Gap between updates | mean 246 ms, max 720 ms |
+| `turn.end` after last speech frame | 1124 ms |
+| `turn.eager_end` to `turn.end` gap | 345 ms |
+
+Final transcript: `Draft a message to Priya saying, I'll see her Thursday at 2 for the Q3 deck review.`
+
+### Quirks
+
+- Spoken "two" comes back as "2", and a comma appears after "saying". Do not match on exact strings; normalize before intent matching.
+- Several updates arrive within a few ms of each other (for example +3204, +3219, +3236), so debounce downstream.
+- The last `turn.update`, `turn.eager_end` and the final update land at the same instant (+5380 ms). The final update adds a trailing period.
+- `say` writes a WAV that `file` describes only as "RIFF data, WAVE audio", so the spike's parser walks chunks to find `fmt ` and `data`.
+- Errors print as `[ink] error <title> <message>`. Headers and keys are never printed.
+
+### Turn events
+
+- `turn.start` is always the first event in a turn.
+- `turn.update.transcript` is cumulative within the turn and never revised.
+- `turn.eager_end` fires when the end-of-turn probability crosses `turn_eager_end_threshold` (default 0.6). It carries the transcript so far.
+- It is always followed by exactly one of `turn.resume` (the user kept talking, the same turn continues, more `turn.update` follow) or `turn.end` (turn closed, final transcript).
+- AHEAD uses `turn.eager_end` as the "finalize speculation" signal. It must treat `turn.resume` as "un-finalize, keep speculating", not as a new turn.
+- In the spike run `turn.eager_end` appeared once and `turn.end` followed 345 ms later. `turn.resume` did not appear (the fixture has no mid-utterance pause), so its handling is untested live.

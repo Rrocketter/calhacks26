@@ -14,10 +14,12 @@
   },
   "dependencies": {
     "@ahead/contracts": "workspace:*",
-    "@moss-js/moss": "1.21.0"
+    "@moss-js/moss": "1.21.0",
+    "ws": "8.22.0"
   },
   "devDependencies": {
     "@types/node": "20.19.43",
+    "@types/ws": "8.18.2",
     "tsx": "4.23.15"
   }
 }
