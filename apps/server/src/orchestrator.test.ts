@@ -19,6 +19,8 @@ type Opts = {
   autoState?: boolean;
   /** tracker.onTurnEnd waits for this before resolving (a slow final Haiku call). */
   gate?: Promise<void>;
+  /** tracker.onEagerEnd waits for this before resolving (the eager text's Moss step). */
+  eagerGate?: Promise<void>;
 };
 
 const belief = (intent: Belief['intent'], entities: Record<string, string> = {}, claims: Claim[] = []): Belief => ({
@@ -41,7 +43,10 @@ function setup(opts: Opts = {}) {
   const rec = (name: string, args: unknown[]) => calls.push({ name, args });
   const tracker: TrackerPort = {
     onUpdate: async (t, text) => void rec('tracker.onUpdate', [t, text]),
-    onEagerEnd: async (t, text) => void rec('tracker.onEagerEnd', [t, text]),
+    onEagerEnd: async (t, text) => {
+      rec('tracker.onEagerEnd', [t, text]);
+      if (opts.eagerGate) await opts.eagerGate;
+    },
     onResume: (t) => void rec('tracker.onResume', [t]),
     onTurnEnd: async (t, text) => {
       rec('tracker.onTurnEnd', [t, text]);
@@ -134,6 +139,7 @@ test('routes partial, eager_end, resume, turn_end to tracker and speculator per 
   s.orch.onVoiceEvent(start('t1'));
   s.orch.onVoiceEvent(partial('t1', 'move my'));
   s.orch.onVoiceEvent(eager('t1', 'move my meeting'));
+  await settle(); // the eager end reaches the speculator once the tracker's belief landed
   s.orch.onVoiceEvent(resume('t1'));
   s.orch.onVoiceEvent(final('t1', 'move my meeting'));
   s.orch.onVoiceEvent(end('t1'));
@@ -303,6 +309,7 @@ test('non-confirm first partial after STAGED releases: the turn reaches the spec
   s.orch.onVoiceEvent(partial('t2', 'Okay so move my meeting'));
   s.orch.onTrackerEvent(bu('t2', belief('unknown')));
   s.orch.onVoiceEvent(eager('t2', 'Okay so move my meeting'));
+  await settle(); // the eager end reaches the speculator once the tracker's belief landed
   assert.deepEqual(s.specTypes().slice(before), ['turn_start:t2', 'belief_update:t2', 'turn_eager_end:t2']);
   assert.equal(s.calls.filter((c) => c.name === 'spec.onConfirm').length, 0);
 });
@@ -372,6 +379,7 @@ async function interjectedTurn(s: S) {
   s.orch.onTrackerEvent({ type: 'interject', turnId: 't1', text: INTERJECT });
   s.orch.onTrackerEvent(bu('t1', draft('thursday')));
   s.orch.onVoiceEvent(eager('t1', "Draft a message to Priya saying I'll see her Thursday"));
+  await settle(); // the eager end reaches the speculator once the tracker's belief landed
   s.orch.onVoiceEvent(final('t1', "Draft a message to Priya saying I'll see her Thursday"));
   s.orch.onVoiceEvent(end('t1'));
   s.orch.onVoiceTurnEnd('t1', "Draft a message to Priya saying I'll see her Thursday");
@@ -509,6 +517,7 @@ test('an interjected turn that ends with an empty final flushes unchanged, and a
   s.orch.onTrackerEvent(bu('t1', draft('thursday')));
   s.orch.onTrackerEvent({ type: 'interject', turnId: 't1', text: INTERJECT });
   s.orch.onVoiceEvent(eager('t1', ''));
+  await settle(); // the eager end reaches the speculator once the tracker's belief landed
   s.orch.onVoiceEvent(final('t1', ''));
   s.orch.onVoiceEvent(end('t1')); // VoiceSession does not call onTurnEnd for an empty final
   await settle();
@@ -519,6 +528,7 @@ test('an interjected turn that ends with an empty final flushes unchanged, and a
   s.orch.onTrackerEvent(bu('t2', draft('thursday')));
   s.orch.onTrackerEvent({ type: 'interject', turnId: 't2', text: INTERJECT });
   s.orch.onVoiceEvent(eager('t2', 'x'));
+  await settle(); // the eager end reaches the speculator once the tracker's belief landed
   assert.equal(s.specTypes().at(-1), 'belief_update:t2', 'eager_end of t2 deferred');
 });
 
@@ -688,4 +698,30 @@ test('an unanswered Apply? closes after confirmWindowMs; a later "yes" is a norm
 test('default windows: correction 4000 ms, Apply? 6000 ms', () => {
   assert.equal(CORRECTION_TIMEOUT_MS, 4000);
   assert.equal(CONFIRM_WINDOW_MS, 6000);
+});
+
+// ---- eager end waits for the tracker ----
+
+test('eager end reaches the speculator after the belief the tracker made from the eager text', async () => {
+  let open!: () => void;
+  const s = setup({ eagerGate: new Promise<void>((r) => (open = r)) });
+  begin(s, 't1', 'Move my Friday meeting with Priya to Monday');
+  s.orch.onVoiceEvent(eager('t1', 'Move my Friday meeting with Priya to Monday morning.'));
+  await settle();
+  assert.deepEqual(s.specTypes(), ['turn_start:t1'], 'eager end held while the tracker works');
+  s.orch.onTrackerEvent(bu('t1', belief('reschedule_event', { time: '09:00' })));
+  open();
+  await settle();
+  assert.deepEqual(s.specTypes(), ['turn_start:t1', 'belief_update:t1', 'turn_eager_end:t1']);
+});
+
+test('a turn_resume before the tracker finishes drops the delayed eager end', async () => {
+  let open!: () => void;
+  const s = setup({ eagerGate: new Promise<void>((r) => (open = r)) });
+  begin(s, 't1');
+  s.orch.onVoiceEvent(eager('t1', 'Draft a message to Priya'));
+  s.orch.onVoiceEvent(resume('t1'));
+  open();
+  await settle();
+  assert.deepEqual(s.specTypes(), ['turn_start:t1', 'turn_resume:t1']);
 });

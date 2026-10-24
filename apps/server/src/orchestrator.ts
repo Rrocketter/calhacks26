@@ -75,6 +75,8 @@ export class Orchestrator {
   /** Turns whose turn_start went to toSpec; spec-bound events of any other turn are dropped. */
   private readonly started = new Set<string>();
   private readonly lastPartial = new Map<string, string>();
+  /** Bumped on turn_resume / turn_end: a delayed eager end for an older generation is dropped. */
+  private readonly endGen = new Map<string, number>();
   /** Turns that have shown non-empty text: only a turn's first text can be a spoken confirm. */
   private readonly spoke = new Set<string>();
   private readonly lastBelief = new Map<string, Belief>();
@@ -121,18 +123,30 @@ export class Orchestrator {
         this.speech(ev.turnId, ev.text);
         if (tracker) this.guard(tracker.onUpdate(ev.turnId, ev.text), 'tracker update');
         return;
-      case 'turn_eager_end':
+      case 'turn_eager_end': {
         this.d.send(ev);
         this.speech(ev.turnId, ev.text);
-        if (tracker) this.guard(tracker.onEagerEnd(ev.turnId, ev.text), 'tracker eager end');
-        this.toSpec(ev);
+        if (!tracker) return this.toSpec(ev);
+        // Phase 2 fires on eager end with the speculator's latest belief, so let the tracker's
+        // belief for the eager text land first (Moss only, about 25 ms; never waits on Haiku).
+        const gen = this.endGen.get(ev.turnId) ?? 0;
+        const forward = () => {
+          if ((this.endGen.get(ev.turnId) ?? 0) === gen) this.toSpec(ev);
+        };
+        tracker.onEagerEnd(ev.turnId, ev.text).then(forward, (err: unknown) => {
+          this.error('orchestrator', `tracker eager end: ${String(err)}`.slice(0, 200));
+          forward();
+        });
         return;
+      }
       case 'turn_resume':
+        this.bumpEnd(ev.turnId);
         this.d.send(ev);
         if (tracker) this.safely(() => tracker.onResume(ev.turnId), 'tracker resume');
         this.toSpec(ev);
         return;
       case 'turn_end': {
+        this.bumpEnd(ev.turnId);
         if (this.openTurn === ev.turnId) this.openTurn = null;
         this.d.send(ev);
         this.toSpec(ev);
@@ -283,6 +297,7 @@ export class Orchestrator {
   /** A repeated turn_start closes the old turn first, with no spoken reply. */
   private syntheticEnd(old: string, ts: number): void {
     const ev: ServerEvent = { type: 'turn_end', turnId: old, ts };
+    this.bumpEnd(old);
     this.openTurn = null;
     if (this.pendingStart?.turnId === old) this.pendingStart = null;
     this.d.send(ev);
@@ -437,6 +452,10 @@ export class Orchestrator {
   }
 
   // ---- helpers ----
+
+  private bumpEnd(turnId: string): void {
+    this.endGen.set(turnId, (this.endGen.get(turnId) ?? 0) + 1);
+  }
 
   private say(text: string, turnId: string): void {
     if (this.closed) return;
