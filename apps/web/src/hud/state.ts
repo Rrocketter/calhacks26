@@ -30,6 +30,7 @@ export type HudState = {
   diffs: { file: string; diff: string }[]; // one per file, a repeat replaces in place
   result: DroidResult | null;
   ttfa: { client?: number; server?: number }; // reset at turn_end
+  confirmWindow: boolean; // the server is listening for a spoken yes / no
   error: string | null;
 };
 export type HudAction = ServerEvent | { type: 'client_ttfa'; ms: number } | { type: 'reset' };
@@ -54,6 +55,7 @@ export function initialHud(): HudState {
     diffs: [],
     result: null,
     ttfa: {},
+    confirmWindow: false,
     error: null,
   };
 }
@@ -88,10 +90,12 @@ function lastIndex(text: string): number | null {
 function interjectSaid(belief: Belief | null, text: string): string | null {
   const claims = belief?.claims ?? [];
   const hay = ` ${words(text).map(norm).join(' ')} `;
-  const hit = claims.find((c) => {
-    const said = words(c.said).map(norm).filter(Boolean).join(' ');
-    return said !== '' && hay.includes(` ${said} `);
-  });
+  // The interject names the known value ("Say Friday?"); older wordings named the said one.
+  const named = (v: string) => {
+    const w = words(v).map(norm).filter(Boolean).join(' ');
+    return w !== '' && hay.includes(` ${w} `);
+  };
+  const hit = claims.find((c) => named(c.known) || named(c.said));
   return (hit ?? claims[0])?.said ?? null;
 }
 
@@ -212,6 +216,7 @@ export function hudReducer(s: HudState, a: HudAction): HudState {
     case 'droid_event':
       return applyDroid(s, a);
     case 'metric':
+      if (a.label === 'confirm_window') return { ...s, confirmWindow: a.ms > 0 };
       return a.source === 'sonic' && a.label === 'ttfa'
         ? { ...s, ttfa: { ...s.ttfa, server: a.ms } }
         : s;
