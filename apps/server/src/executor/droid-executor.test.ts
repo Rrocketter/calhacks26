@@ -487,3 +487,17 @@ test('rollback while phase1 waits for the session open: the phase1 prompt is nev
   assert.equal(await git.currentBranch(), 'main');
   assert.deepEqual(specBranches(raw), []);
 });
+
+test('close() closes the warm session opened after commit, on the chain', { timeout: 5000 }, async () => {
+  const { f, exec } = setup();
+  await exec.phase1('t1', belief());
+  await exec.phase2('t1', belief());
+  const a = exec.commit('t1');
+  const w = exec.warm();
+  const c = exec.close();
+  await Promise.all([a, w, c]);
+  assert.equal(f.sessions.length, 2);
+  assert.deepEqual(f.sessions[1]!.calls, ['close']);
+  await exec.close(); // idempotent
+  assert.deepEqual(f.sessions[1]!.calls, ['close']);
+});

@@ -283,6 +283,11 @@ export class DroidExecutor implements Executor {
     });
   }
 
+  // Shutdown: closes the session after everything already queued (a warm included). Leaves git as is.
+  close(): Promise<void> {
+    return this.enqueue(() => this.closeSession());
+  }
+
   // Runs on the chain. Leaves no live speculation: the named turn and any other live one are discarded.
   private async doRollback(turnId: string): Promise<void> {
     const t0 = performance.now();
