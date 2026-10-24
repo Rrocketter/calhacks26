@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { HudState } from './state';
+import { isMemoryHit, panelHits, type HudState } from './state';
 import { Sparkline, Tween, useSeries } from './motion';
 
 const LOCK = 0.75;
@@ -10,7 +10,7 @@ export function BeliefPanel({ hud }: { hud: HudState }) {
   const conf = b?.confidence ?? 0;
   const locked = conf >= LOCK;
   const entities = Object.entries(b?.entities ?? {});
-  const hits = (b?.topHits ?? []).slice(0, 3);
+  const hits = panelHits(b?.topHits ?? []);
   const series = useSeries(hud.moss.count, hud.moss.lastMs);
   // One pulse on the LOCK line each time confidence crosses it upward.
   const [crossings, setCrossings] = useState(0);
@@ -86,9 +86,12 @@ export function BeliefPanel({ hud }: { hud: HudState }) {
         {hits.length === 0 && <span className="empty">No hits yet</span>}
         {hits.map((h, i) => (
           // By doc, so a newly retrieved doc slides in; a repeated docId falls back to its index.
-          <div className="hit" key={hits.findIndex((x) => x.docId === h.docId) === i ? h.docId : `${h.docId}#${i}`}>
+          <div className={isMemoryHit(h) ? 'hit memory' : 'hit'} key={hits.findIndex((x) => x.docId === h.docId) === i ? h.docId : `${h.docId}#${i}`}>
             <div className="hit-head">
-              <span className="doc">{h.docId}</span>
+              <span className="doc">
+                {isMemoryHit(h) && <span className="tag-memory">memory</span>}
+                {h.docId}
+              </span>
               <span className="score num">
                 <span className="score-bar">
                   <span style={{ width: `${Math.min(100, Math.max(0, h.score * 100))}%` }} />

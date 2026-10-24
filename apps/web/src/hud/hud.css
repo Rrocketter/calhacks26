@@ -1039,6 +1039,21 @@ mark {
   transition: width 400ms var(--ease);
 }
 
+.hit.memory {
+  border-color: color-mix(in oklab, var(--accent) 40%, var(--line));
+}
+
+.tag-memory {
+  margin-right: 8px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--accent-ink);
+  background: var(--accent);
+}
+
 .hit .snippet {
   font-size: 17px;
   color: var(--dim);

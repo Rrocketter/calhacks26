@@ -1,4 +1,4 @@
-import type { Belief, Claim, ClientEvent, ServerEvent, State } from '@ahead/contracts';
+import type { Belief, Claim, ClientEvent, DroidDiffPayload, ServerEvent, State } from '@ahead/contracts';
 import { SPECULATIVE } from './executor/state-machine.js';
 import {
   APPLIED_REPLY,
@@ -12,6 +12,8 @@ import {
   type Answerer,
 } from './reply.js';
 import type { Speaker } from './voice/session.js';
+import { isoLocal } from './belief/entities.js';
+import { artifactMemoryDoc, turnMemoryDoc, type MemoryPort, type Outcome } from './moss/memory.js';
 
 export interface VoicePort {
   handleClient(ev: ClientEvent): void;
@@ -45,6 +47,8 @@ export type OrchestratorDeps = {
   today?: () => Date;
   correctionTimeoutMs?: number; // default CORRECTION_TIMEOUT_MS
   confirmWindowMs?: number; // default CONFIRM_WINDOW_MS
+  /** Conversation memory (Moss). Null or absent: nothing is remembered. */
+  memory?: MemoryPort | null;
 };
 
 /** How long an unanswered interject holds the turn's Droid Phase 2. */
@@ -109,6 +113,11 @@ export class Orchestrator {
   /** When each turn's correction was settled (by voice, click, key or timeout). */
   private readonly correctionSettled = new Map<string, number>();
   private windowTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** Ended turns' final text, turn-end belief and last written outcome, for memory upserts. */
+  private readonly memTurns = new Map<string, { text: string; belief: Belief | undefined; outcome: Outcome }>();
+  /** Latest diff per file of each speculative turn: a COMMITTED turn's artifact. */
+  private readonly diffs = new Map<string, Map<string, string>>();
 
   constructor(deps: OrchestratorDeps) {
     this.d = deps;
@@ -207,11 +216,13 @@ export class Orchestrator {
   /** Speculator emit and executor emit. */
   onSpeculatorEvent = (ev: ServerEvent): void => {
     this.d.send(ev);
+    if (ev.type === 'droid_event' && ev.kind === 'diff') this.recordDiff(ev.turnId, ev.payload);
     if (ev.type !== 'state_change' || ev.turnId === '') return;
     this.specState.set(ev.turnId, ev.state);
     this.lastSpecTurn = ev.turnId;
     if (ev.state === 'STAGED' && this.ended.has(ev.turnId) && this.isSpecTurn(ev.turnId)) this.speakStaged(ev.turnId);
     if (ev.state === 'COMMITTED' || ev.state === 'ROLLED_BACK') {
+      this.rememberOutcome(ev.turnId, ev.state);
       if (this.awaiting?.kind === 'apply' && this.awaiting.turnId === ev.turnId) this.release();
       if (this.spokenConfirm === ev.turnId) {
         this.spokenConfirm = null;
@@ -411,6 +422,7 @@ export class Orchestrator {
   private async reply(turnId: string, finalText: string, correcting: boolean): Promise<void> {
     const tracker = this.d.tracker;
     const belief = tracker ? await tracker.onTurnEnd(turnId, finalText) : this.lastBelief.get(turnId);
+    this.rememberTurn(turnId, finalText, belief);
     if (correcting || this.closed) return; // the interject already asked a question
     if (belief?.intent === 'lookup') {
       let answer: string;
@@ -421,6 +433,7 @@ export class Orchestrator {
         this.error('llm', `answer failed: ${String(err)}`.slice(0, 200));
         answer = FALLBACK_REPLY;
       }
+      console.log(`[orchestrator] lookup ${turnId} answer "${answer}"`);
       this.say(answer, turnId);
       return;
     }
@@ -478,6 +491,50 @@ export class Orchestrator {
 
   private bumpEnd(turnId: string): void {
     this.endGen.set(turnId, (this.endGen.get(turnId) ?? 0) + 1);
+  }
+
+  // ---- conversation memory ----
+
+  private rememberTurn(turnId: string, text: string, belief: Belief | undefined): void {
+    const state = this.specState.get(turnId);
+    let outcome: Outcome = 'no action';
+    if (belief?.intent === 'lookup') outcome = 'lookup';
+    else if (state === 'COMMITTED') outcome = 'committed';
+    else if (state === 'ROLLED_BACK') outcome = 'rolled back';
+    else if (belief && SPECULATIVE.includes(belief.intent) && this.isSpecTurn(turnId)) outcome = 'staged';
+    this.memTurns.set(turnId, { text, belief, outcome });
+    this.writeMemory(turnId);
+  }
+
+  /** A staged turn's final outcome; a COMMITTED turn also stores what it wrote. */
+  private rememberOutcome(turnId: string, state: 'COMMITTED' | 'ROLLED_BACK'): void {
+    if (state === 'COMMITTED') {
+      const diffs = [...(this.diffs.get(turnId) ?? new Map<string, string>())].map(([file, diff]) => ({ file, diff }));
+      const doc = artifactMemoryDoc({ turnId, date: isoLocal(this.today()), belief: this.lastBelief.get(turnId), diffs });
+      if (doc && this.d.memory) this.guard(this.d.memory.add(doc), 'memory add');
+    }
+    this.diffs.delete(turnId);
+    const mem = this.memTurns.get(turnId);
+    if (!mem || mem.outcome === 'lookup') return; // not ended yet (turn end writes it), or a lookup's dropped speculation
+    mem.outcome = state === 'COMMITTED' ? 'committed' : 'rolled back';
+    this.writeMemory(turnId);
+  }
+
+  private writeMemory(turnId: string): void {
+    const mem = this.memTurns.get(turnId);
+    if (!mem || !this.d.memory) return;
+    // lastBelief first: a correction the user applied after the turn end updates it.
+    const belief = this.lastBelief.get(turnId) ?? mem.belief;
+    const doc = turnMemoryDoc({ turnId, date: isoLocal(this.today()), text: mem.text, belief, outcome: mem.outcome });
+    this.guard(this.d.memory.add(doc), 'memory add');
+  }
+
+  private recordDiff(turnId: string, payload: unknown): void {
+    const p = payload as Partial<DroidDiffPayload> | null;
+    if (typeof p?.file !== 'string' || typeof p.diff !== 'string') return;
+    const files = this.diffs.get(turnId) ?? new Map<string, string>();
+    files.set(p.file, p.diff);
+    this.diffs.set(turnId, files);
   }
 
   private say(text: string, turnId: string): void {

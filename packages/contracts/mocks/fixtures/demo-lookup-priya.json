@@ -1,0 +1,12 @@
+{
+  "turnId": "demo-lookup-priya",
+  "partials": [
+    { "atMs": 800, "text": "What" },
+    { "atMs": 1050, "text": "What did" },
+    { "atMs": 1300, "text": "What did I" },
+    { "atMs": 1550, "text": "What did I tell" },
+    { "atMs": 1800, "text": "What did I tell Priya?" },
+    { "atMs": 2100, "text": "What did I tell Priya?", "eager": true },
+    { "atMs": 2400, "text": "What did I tell Priya?", "final": true }
+  ]
+}

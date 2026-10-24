@@ -55,5 +55,6 @@ describe('constants', () => {
   it('MOSS_INDEX names', () => {
     expect(MOSS_INDEX.spike).toBe('ahead-spike');
     expect(MOSS_INDEX.corpus).toBe('ahead-corpus');
+    expect(MOSS_INDEX.memory).toBe('ahead-memory');
   });
 });

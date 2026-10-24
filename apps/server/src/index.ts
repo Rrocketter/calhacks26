@@ -37,7 +37,7 @@ async function main(): Promise<void> {
   const { contacts } = JSON.parse(readFileSync(contactsFile, 'utf8')) as { contacts: { name: string }[] };
 
   // Warm-up before listening: the first utterance must not pay for cold starts.
-  const moss = await MossIndex.load();
+  const moss = await MossIndex.load(undefined, { memory: true });
   await moss.query('warmup');
   const llm = new HaikuIntentLlm();
   await llm.classify({ partial: 'warmup', topHits: [] });
@@ -131,7 +131,17 @@ async function main(): Promise<void> {
         }
       : null;
 
-    const orch = new Orchestrator({ send, voice: session, tracker, speculator, speaker: sonic, answerer, demo, mic: LIVE_INK });
+    const orch = new Orchestrator({
+      send,
+      voice: session,
+      tracker,
+      speculator,
+      speaker: sonic,
+      answerer,
+      demo,
+      mic: LIVE_INK,
+      memory: moss.memory,
+    });
     let tornDown = false;
     const teardown = (): void => {
       if (tornDown) return;

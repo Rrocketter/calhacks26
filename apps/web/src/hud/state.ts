@@ -1,4 +1,4 @@
-import type { Belief, ServerEvent, State } from '@ahead/contracts';
+import { MEMORY_DOC_PREFIX, type Belief, type MossHit, type ServerEvent, type State } from '@ahead/contracts';
 
 export type ToolCall = { tool: string; path?: string; denied: boolean; reason?: string };
 export type DroidResult = { ok: boolean; summary: string; failed: boolean };
@@ -109,6 +109,16 @@ function confirmTarget(s: HudState, label: string, ms: number): ConfirmTarget | 
 }
 
 /** What a yes / no answers right now. The mock never sends confirm_window: there it is staged work after the turn ended. */
+/** Hits retrieved from conversation memory (Moss `ahead-memory`), tagged "memory" in the Moss panel. */
+export function isMemoryHit(h: MossHit): boolean {
+  return h.docId.startsWith(MEMORY_DOC_PREFIX);
+}
+
+/** The Moss panel's hits: the top 3, plus any memory hits ranked below them. */
+export function panelHits(topHits: MossHit[]): MossHit[] {
+  return [...topHits.slice(0, 3), ...topHits.slice(3).filter(isMemoryHit)];
+}
+
 export function pendingConfirm(s: HudState, mode: 'live' | 'mock', running: boolean): ConfirmTarget | null {
   if (mode === 'live') return running ? s.confirm : null;
   const staged =
