@@ -9,3 +9,4 @@ var/
 data/corpus/*.json
 data/moss-index/
 *.tsbuildinfo
+data/google/
