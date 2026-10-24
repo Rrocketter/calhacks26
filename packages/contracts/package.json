@@ -11,7 +11,12 @@
     "./mocks": {
       "types": "./dist/mocks/index.d.ts",
       "default": "./dist/mocks/index.js"
-    }
+    },
+    "./mocks/node": {
+      "types": "./dist/mocks/node.d.ts",
+      "default": "./dist/mocks/node.js"
+    },
+    "./mocks/fixtures/*.json": "./dist/mocks/fixtures/*.json"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",

@@ -29,9 +29,9 @@ describe('parseServerEvent', () => {
       belief: {
         intent: 'draft_message',
         entities: { person: 'Priya' },
-        claims: [{ field: 'day', said: 'Thursday', known: 'Friday', docId: 'cal-priya' }],
+        claims: [{ field: 'day', said: 'Thursday', known: 'Friday', docId: 'evt-priya-q3' }],
         confidence: 0.82,
-        topHits: [{ docId: 'cal-priya', score: 0.9, snippet: 'Meeting Friday 2 PM' }],
+        topHits: [{ docId: 'evt-priya-q3', score: 0.9, snippet: 'Calendar event: Q3 deck review with Priya Shah, Friday 2 PM' }],
         latencyMs: { moss: 4.2, llm: 380 },
       },
     };

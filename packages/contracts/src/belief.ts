@@ -40,6 +40,8 @@ export const BeliefSchema = z.object({
   intent: IntentSchema,
   entities: z.record(z.string(), z.string()),
   claims: z.array(ClaimSchema),
+  // Strict on purpose: producers (Lane B, Haiku output) must clamp to [0, 1] before emitting,
+  // or the whole belief_update fails to parse.
   confidence: z.number().min(0).max(1),
   topHits: z.array(MossHitSchema),
   latencyMs: z.object({ moss: z.number(), llm: z.number().optional() }),
