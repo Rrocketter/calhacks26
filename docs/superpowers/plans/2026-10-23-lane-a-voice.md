@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Mic in the browser → Cartesia Ink 2 over the server → `transcript_partial` / turn events back to a bare page, and a canned Sonic 3.6 reply (WebSocket TTS) played at turn end, with an interrupt path that pauses STT ingest for 1.5 s.
+**Goal:** Mic in the browser → Cartesia Ink 2 over the server → `transcript_partial` / turn events back to a bare page, and a canned Sonic 3.6 reply (WebSocket TTS) played at turn end, with an interrupt path. Mic audio is dropped (not replaced with silence) while any TTS is playing plus a 300 ms tail, using a server-side `PlaybackClock` estimate.
 
 **Architecture:** One Node process serves a WebSocket at `/ws` (port 8787). Each browser connection gets a `VoiceSession` that owns one `InkClient` (Cartesia STT WebSocket) and one `SonicClient` (Cartesia TTS WebSocket), both opened at connect so they are warm. Ink messages go through a pure `TurnTracker` that assigns `turnId`s and maps to contract `ServerEvent`s. The browser captures 16 kHz PCM with an AudioWorklet and plays 24 kHz PCM through a scheduled AudioContext queue with a 30 ms `stopNow()`.
 
@@ -27,8 +27,9 @@
 
 1. Ink sends `turn.update` with no prior `turn.start` (reconnect mid-utterance) → a turn is opened implicitly, never a partial with an empty `turnId`. Test in Task 1.
 2. `turn.resume` or `turn.end` after the turn already ended → ignored, no event with a stale id. Test in Task 1.
-3. `interject` arrives for a turn that has already ended → no speech, no ingest pause. Test in Task 2.
-4. User starts a new turn while the previous reply is still playing → server cancels the Sonic context (late chunks dropped) and the browser calls `stopNow()`. Server half tested in Task 2; browser half checked manually in Task 5.
+3. `interject` arrives for a turn that has already ended → no speech, no mute. Test in Task 2.
+4. Sonic delivers chunks slower than real time (gaps) or a reply is cancelled mid-stream by an interjection → the mute window follows the browser queue (gaps extend it, cancel ends the old context's window at the 30 ms ramp) instead of muting forever or unmuting early. Tests in Task 2 (`EstimatedPlaybackClock`).
+Accepted trade-off (human, 2026-10-23): with mic muted during all TTS, the user cannot barge in over a reply.
 5. Ink or Sonic socket closes (idle timeout, network) → reopened on next use instead of the session dying silently; an `error` event reaches the page. Checked manually in Tasks 3 and 4.
 
 ---
@@ -38,7 +39,8 @@
 | File | Responsibility |
 |---|---|
 | `apps/server/src/voice/turns.ts` | `TurnTracker`: raw Ink message → `ServerEvent[]`, owns the `turnId` lifecycle. Pure. |
-| `apps/server/src/voice/session.ts` | `VoiceSession`: routes client events to Ink, Ink events to the page, speaks at turn end and on `interject`, ingest gate. Pure given injected deps. |
+| `apps/server/src/voice/playback-clock.ts` | `PlaybackClock` interface + `EstimatedPlaybackClock`: estimates when browser playback of forwarded TTS ends. Pure. Swap for a browser-reported clock if contracts gains a playback-end event. |
+| `apps/server/src/voice/session.ts` | `VoiceSession`: routes client events to Ink, Ink events to the page, speaks at turn end and on `interject`, mutes mic while the clock says TTS is playing. Pure given injected deps. |
 | `apps/server/src/voice/sonic-client.ts` | `SonicClient`: Cartesia TTS WebSocket, `speak` / `cancelActive`, drops late chunks, TTFA metric. |
 | `apps/server/src/voice/ink-client.ts` | `InkClient`: Cartesia STT WebSocket, `sendPcm`, lazy reconnect, cadence log. |
 | `apps/server/src/index.ts` | HTTP + `WebSocketServer` on `/ws`, one `VoiceSession` per connection. |
@@ -96,28 +98,39 @@ Mapping (ts is passed through as the event `ts`):
 
 ---
 
-### Task 2: VoiceSession (routing, turn-end reply, interject, ingest gate)
+### Task 2: PlaybackClock + VoiceSession (routing, turn-end reply, interject, mic mute)
 
 **Files:**
-- Create: `apps/server/src/voice/session.ts`
-- Test: `apps/server/src/voice/session.test.ts`
+- Create: `apps/server/src/voice/playback-clock.ts`, `apps/server/src/voice/session.ts`
+- Test: `apps/server/src/voice/playback-clock.test.ts`, `apps/server/src/voice/session.test.ts`
 
 **Interfaces:**
 - Consumes: `TurnTracker`, `InkMessage` (Task 1); `mockBeliefStream` from `@ahead/contracts/mocks`; `ClientEvent`, `ServerEvent` from `@ahead/contracts`.
 - Produces:
   ```ts
+  // playback-clock.ts
+  export const PLAYBACK_TAIL_MS = 300;
+  export const STOP_RAMP_MS = 30;               // matches PcmPlayer.stopNow()
+  export interface PlaybackClock {
+    onChunk(contextId: string, pcmBytes: number, sampleRate: number, now: number): void; // a tts_audio_chunk was forwarded
+    onCancel(contextId: string, now: number): void;
+    isMuted(now: number): boolean;              // true while TTS is (estimated) playing, plus the tail
+  }
+  export class EstimatedPlaybackClock implements PlaybackClock { constructor(tailMs?: number); }
+
+  // session.ts
   export interface InkSink { sendPcm(pcm: Buffer): void; }
   export interface Speaker {
     speak(text: string, opts: { interrupt: boolean; turnId: string }): string; // returns contextId
-    cancelActive(): void;                                                       // no-op if nothing playing
+    cancelActive(): string | null;                                              // cancelled contextId, null if none
   }
   export const TURN_END_REPLY = 'Got it, I heard you.';
-  export const INGEST_PAUSE_MS = 1500;
   export class VoiceSession {
     constructor(deps: {
       send: (e: ServerEvent) => void;
       ink: InkSink;
       speaker: Speaker;
+      clock?: PlaybackClock;         // default new EstimatedPlaybackClock()
       now?: () => number;            // default Date.now
       mockBelief?: boolean;          // default false; index.ts passes process.env.AHEAD_MOCK_BELIEF === '1'
       mockSpeed?: number;            // passed to mockBeliefStream, default 1
@@ -125,28 +138,49 @@ Mapping (ts is passed through as the event `ts`):
     handleClient(ev: ClientEvent): void;
     handleInk(msg: InkMessage): void;
     handleInterject(turnId: string, text: string): void;
+    handleTts(ev: ServerEvent): void;  // speaker output passes through here: feeds the clock, then send()
   }
   ```
 
+`EstimatedPlaybackClock` models the browser queue (`PcmPlayer` schedules each buffer at `max(currentTime, nextStart)`):
+```
+onChunk: durMs = pcmBytes / 2 / sampleRate * 1000
+         if contextId != current: current = contextId; end = now      // new context: browser stopNow()s the old one
+         end = max(end, now) + durMs
+onCancel(id): if id == current: end = min(end, now + STOP_RAMP_MS)
+isMuted(now): now < end + tailMs
+```
+Done chunks (`pcm: ''`) contribute 0 ms. The clock is the only thing `VoiceSession` asks; a browser-reported clock would implement the same interface (one-file swap at integration if contracts gains the event).
+
 Behavior:
-- `audio_chunk`: if `sampleRate !== 16000` send `error {source:'voice'}` once per session and drop; if `now() < pausedUntil` drop (do not send zeros, so Ink does not count it as silence); else `ink.sendPcm(Buffer.from(pcm, 'base64'))`. Other client events: ignore (Lanes C/D own them).
-- `handleInk`: forward every event from `tracker.handle(msg, now())` to `send`. On `turn_start`: `speaker.cancelActive()` (user barge-in over a reply); if `mockBelief`, start `mockBeliefStream(turnId, {speed: mockSpeed})` and forward every event it yields, except call `handleInterject` for `interject` events. On `turn_end`: `speaker.speak(TURN_END_REPLY, {interrupt:false, turnId})`.
-- `handleInterject(turnId, text)`: ignore unless `turnId === tracker.turnId`; ignore if this turn already interjected (max one per turn, PLAN.md). Otherwise `send(interject)`, `speaker.speak(text, {interrupt:true, turnId})`, `pausedUntil = now() + INGEST_PAUSE_MS`. Lane B will call this directly after integration.
+- `audio_chunk`: if `sampleRate !== 16000` send `error {source:'voice'}` once per session and drop; if `clock.isMuted(now())` drop (drop, never send zeros, so Ink does not count it as silence); else `ink.sendPcm(Buffer.from(pcm, 'base64'))`. Other client events: ignore (Lanes C/D own them).
+- `handleTts`: for `tts_audio_chunk`, `clock.onChunk(contextId, Buffer.byteLength(pcm, 'base64'), sampleRate, now())`; then `send(ev)` for every event.
+- `handleInk`: forward every event from `tracker.handle(msg, now())` to `send`. On `turn_start`: cancel any active reply (`speaker.cancelActive()`, pass the id to `clock.onCancel`); if `mockBelief`, start `mockBeliefStream(turnId, {speed: mockSpeed})` and forward every event it yields, except call `handleInterject` for `interject` events. On `turn_end`: `speaker.speak(TURN_END_REPLY, {interrupt:false, turnId})`.
+- `handleInterject(turnId, text)`: ignore unless `turnId === tracker.turnId`; ignore if this turn already interjected (max one per turn, PLAN.md). Otherwise `send(interject)`, `speaker.speak(text, {interrupt:true, turnId})`. The mute starts when its first chunk passes `handleTts`. Lane B will call this directly after integration.
 - A mock stream whose turn has ended stops forwarding (check `tracker.turnId` before each forward).
 
-- [ ] **Step 1: Write the failing tests** with a fake `InkSink` (records buffers), fake `Speaker` (records calls, returns `'c' + n`), a settable clock, `send` pushing into an array:
+- [ ] **Step 1: Write the failing clock tests** in `playback-clock.test.ts` (24 kHz, so 48000 bytes = 1000 ms):
+  - `idle clock is not muted`: `isMuted(0) === false`.
+  - `mutes for audio plus 300 ms tail`: chunk 48000 bytes at t=0 → `isMuted(1299) === true`, `isMuted(1300) === false`.
+  - `back-to-back chunks queue`: chunks of 24000 bytes at t=0 and t=100 → muted until 1000 + 300.
+  - `gaps extend from arrival`: chunk 24000 at t=0, chunk 24000 at t=2000 → `isMuted(799) === true`, `isMuted(800) === false` (first chunk ends at 500 + tail), `isMuted(2799) === true`, `isMuted(2800) === false`.
+  - `cancel ends at the ramp`: chunk 480000 bytes (10 s) at t=0, `onCancel` same id at t=500 → `isMuted(829) === true`, `isMuted(830) === false`.
+  - `new context replaces the old window`: chunk 480000 'a' at t=0, chunk 24000 'b' at t=500 → unmuted at 500 + 500 + 300 = 1300.
+  - `done chunk adds nothing`: chunk 48000 at t=0, chunk 0 bytes at t=100 → unmuted at 1300.
+- [ ] **Step 2: Write the failing session tests** with a fake `InkSink` (records buffers), fake `Speaker` (records calls, returns `'c' + n`, `cancelActive` returns the last id or null), a settable clock, `send` pushing into an array:
   - `forwards audio when open`: `audio_chunk` 16000 → one `sendPcm` call whose bytes equal the decoded base64.
   - `rejects wrong sample rate`: 48000 → no `sendPcm`, one `error` event; a second bad chunk adds no second error.
   - `turn end speaks the canned reply`: Ink start/update/end → `speak` called once with `TURN_END_REPLY`, `{interrupt:false, turnId:<that turn>}`.
-  - `interject pauses ingest for 1500 ms`: open turn, `handleInterject(id, 'x')` at t=1000 → `interject` event sent, `speak('x', {interrupt:true, turnId:id})`; audio at t=2499 dropped; audio at t=2500 forwarded.
+  - `mic is dropped while TTS plays`: `handleTts` a 1000 ms `tts_audio_chunk` at t=0 → the event is forwarded via `send`; audio at t=1299 dropped; audio at t=1300 forwarded. Applies to the turn-end reply too (no interject involved).
+  - `interject speaks with interrupt`: open turn, `handleInterject(id, 'x')` → `interject` event sent, `speak('x', {interrupt:true, turnId:id})`.
   - `interject for an ended turn is ignored`: turn ends, then `handleInterject(oldId, 'x')` → no speak, no interject event, audio still forwarded.
   - `one interjection per turn`: two `handleInterject` calls in one turn → one speak with `interrupt:true`.
   - `new turn cancels the active reply`: turn 1 ends, turn 2 `turn.start` → `cancelActive` called.
   - `mock belief drives the interject path`: `mockBelief:true, mockSpeed:50`, real `Date.now` clock; Ink `turn.start`, await ~150 ms → sent events include `moss_hits`, `belief_update`, exactly one `interject` with `DEMO_INTERJECTION`, and speaker got `{interrupt:true}`.
-- [ ] **Step 2: Run, expect FAIL** — `pnpm --filter @ahead/server test` → module not found for `session.js`.
-- [ ] **Step 3: Implement `VoiceSession`.**
-- [ ] **Step 4: Run, expect PASS** — `pnpm --filter @ahead/server test`, then `pnpm -r build && pnpm -r lint`.
-- [ ] **Step 5: Commit** — `feat(voice): voice session routes turns, reply and interject`
+- [ ] **Step 3: Run, expect FAIL** — `pnpm --filter @ahead/server test` → module not found for `playback-clock.js` / `session.js`.
+- [ ] **Step 4: Implement `EstimatedPlaybackClock` and `VoiceSession`.**
+- [ ] **Step 5: Run, expect PASS** — `pnpm --filter @ahead/server test`, then `pnpm -r build && pnpm -r lint`.
+- [ ] **Step 6: Commit** — `feat(voice): voice session with playback-clock mic mute`
 
 ---
 
@@ -164,16 +198,17 @@ Behavior:
     constructor(opts: { apiKey: string; send: (e: ServerEvent) => void });
     connect(): Promise<void>;   // opens the socket now so the first reply skips the handshake
     speak(text: string, opts: { interrupt: boolean; turnId: string }): string;
-    cancelActive(): void;
+    cancelActive(): string | null;
     close(): void;
   }
   ```
+  In the server (Task 4) `send` is `(e) => session.handleTts(e)` so the playback clock sees every chunk. The implicit cancel inside `speak` (new reply while one is active) is invisible to the session, so `SonicClient` takes an optional `onCancel?: (contextId: string) => void` in its constructor opts and calls it from every cancel (`cancelActive` and the implicit one in `speak`). Task 4 wires it to `clock.onCancel(id, Date.now())`.
 
 Approach (audio plumbing, no TDD):
 - Before writing, check the Cartesia TTS WebSocket docs (context7 `cartesia`, or docs.cartesia.ai) for exact message shapes and auth; sdk-notes says these are untested live. Start with header `X-API-Key` (same as Ink) and `cartesia_version` in the query.
 - `speak`: `contextId = crypto.randomUUID()`. If `interrupt` or a context is active, `cancelActive()` first. Send `{model_id, transcript, voice, language:'en', context_id, output_format, continue:false}`. If the socket is not open, connect then send (queue the request).
 - Incoming `chunk` for the active context → `send({type:'tts_audio_chunk', turnId, contextId, pcm: data, sampleRate:24000, done:false})`. On first chunk of a context: `logLatency('sonic', 'first chunk', ms)` and `send({type:'metric', source:'sonic', label:'ttfa', ms})`, where ms is measured from the `speak()` call. `done` for the active context → one `tts_audio_chunk` with `pcm:''`, `done:true`, then clear active. Chunks/done for any other context id → drop.
-- `cancelActive`: send `{context_id, cancel:true}`, mark it dropped, clear active.
+- `cancelActive`: if a context is active, send `{context_id, cancel:true}`, mark it dropped, clear active, call `onCancel(id)`, return the id; else return null.
 - `error` messages → `send({type:'error', source:'sonic', message})`, log `[sonic] error ...`. Socket `close` → mark closed; next `speak` reconnects.
 - `smoke-sonic-ws.ts`: connect, then speak the 90-char `DEMO_INTERJECTION` and the short `TURN_END_REPLY` 3 times each (wait for `done` between), print first-chunk ms per run, total bytes and audio seconds, and write the last reply to `var/spikes/sonic-ws.raw`. Also time one cancel: speak, cancel after the first chunk, count chunks that arrive afterwards for that context (they must not be forwarded).
 
@@ -202,14 +237,14 @@ Approach (audio plumbing, no TDD):
     close(): void;
   }
   ```
-  Server: `PORT` env (default `8787`), WebSocket path `/ws`. Each connection: create `SonicClient`, `InkClient`, `VoiceSession`; call `connect()` on both; parse frames with `parseClientEvent` (invalid → `error` event); on socket close, close both clients.
+  Server: `PORT` env (default `8787`), WebSocket path `/ws`. Each connection: create one `EstimatedPlaybackClock`, then `SonicClient` (`send: e => session.handleTts(e)`, `onCancel: id => clock.onCancel(id, Date.now())`), `InkClient` (`onMessage: m => session.handleInk(m)`), and `VoiceSession` with that clock; call `connect()` on both clients; parse frames with `parseClientEvent` (invalid → `error` event); on socket close, close both clients.
 
 Approach:
 - `InkClient` mirrors `apps/server/scripts/spike-ink.ts` (URL, header, JSON text messages). It does not send `{"type":"close"}` between turns; one socket serves many turns. If Ink closes the socket after `turn.end` or on idle, the next `sendPcm` reopens it. Log each `turn.update` as `[ink] partial +<ms since previous update>ms` and `turn.end` as `[ink] turn.end`.
-- `smoke-voice.ts`: read `scripts/fixtures/demo-utterance-1.wav` (reuse the WAV parsing from `spike-ink.ts`; copy the function, the spike stays untouched), connect to `ws://localhost:${PORT}/ws`, send 100 ms `audio_chunk` frames in real time then 2.5 s of zero frames, then keep listening until the first `tts_audio_chunk` with `done:true` or 15 s. Print each event type with `+ms`, then a summary: partial count, partial gap mean/max, `turn_end` → first `tts_audio_chunk` ms (client-observed TTFA), and the server `metric ttfa` value. Exit 1 if no `transcript_final` or no audio.
+- `smoke-voice.ts`: read `scripts/fixtures/demo-utterance-1.wav` (reuse the WAV parsing from `spike-ink.ts`; copy the function, the spike stays untouched), connect to `ws://localhost:${PORT}/ws`, send 100 ms `audio_chunk` frames in real time, then keep sending zero frames (like a live mic) until `turn_end` and the reply's `tts_audio_chunk` with `done:true`, or 20 s. Zero frames matter: while the server mutes the mic for an interjection, Ink receives nothing, and the turn only ends once silence reaches it after the mute. Print each event type with `+ms`, then a summary: partial count, partial gap mean/max, `turn_end` → first `tts_audio_chunk` ms (client-observed TTFA), and the server `metric ttfa` value. Exit 1 if no `transcript_final` or no audio.
 
 - [ ] **Step 1: Implement `InkClient`, the server entry, and the smoke script.**
-- [ ] **Step 2: Run the server** `pnpm --filter @ahead/server dev` (background), then `pnpm --filter @ahead/server smoke:voice`. Expected: `turn_start`, ~17 `transcript_partial`, `turn_eager_end`, `transcript_final` with "Draft a message to Priya saying, I'll see her Thursday at 2 for the Q3 deck review.", `turn_end`, then `tts_audio_chunk`s ending `done:true`. Run the smoke twice on the same server to prove a second connection works, and once more with `AHEAD_MOCK_BELIEF=1` on the server to see `moss_hits`/`belief_update`/`interject` and an interrupting `tts_audio_chunk` stream mid-turn.
+- [ ] **Step 2: Run the server** `pnpm --filter @ahead/server dev` (background), then `pnpm --filter @ahead/server smoke:voice`. Expected: `turn_start`, ~17 `transcript_partial`, `turn_eager_end`, `transcript_final` with "Draft a message to Priya saying, I'll see her Thursday at 2 for the Q3 deck review.", `turn_end`, then `tts_audio_chunk`s ending `done:true`. Run the smoke twice on the same server to prove a second connection works, and once more with `AHEAD_MOCK_BELIEF=1` on the server to see `moss_hits`/`belief_update`/`interject` and an interrupting `tts_audio_chunk` stream mid-turn. In the mock run, expect the final transcript to be cut short (fixture audio during the mute window is dropped by design) and the turn to end after the mute plus Ink's end-of-turn delay; record the observed mute window from server logs (log `[voice] mute until +<ms>` when the clock's window extends, and `[voice] dropped <n> mic frames` when it ends).
 - [ ] **Step 3: Check multi-turn on one Ink socket**: run the smoke with the WAV sent twice in one connection (flag `--twice`) and confirm two `turn_start`s with different ids. Record whether Ink kept the socket open between turns.
 - [ ] **Step 4: Record in `docs/sdk-notes.md`** (Ink section, new "Live server path" subsection): partial cadence through the server (mean/max gap), TTFA (server metric and client-observed) for 3 runs, whether the Ink socket survives across turns and idle behavior seen.
 - [ ] **Step 5: Checks** — `pnpm -r build && pnpm -r lint && pnpm --filter @ahead/server test`.
@@ -241,10 +276,12 @@ Approach (manual verification):
 - Worklet: `/* global registerProcessor, AudioWorkletProcessor */` at top (eslint has no browser-worklet globals). `process()` posts a copy of `inputs[0][0]` to the port.
 - Capture: `getUserMedia({audio:{echoCancellation:true, noiseSuppression:true, channelCount:1}})`, `new AudioContext({sampleRate:16000})`, load `/pcm-capture-worklet.js`. Convert Float32 → Int16 (clamp), accumulate 1600 samples (100 ms), base64, emit `{type:'audio_chunk', pcm, sampleRate:16000, seq}`.
 - Playback: one `AudioContext` (default rate), a `GainNode` to destination. `enqueue`: decode base64 → Int16 → `AudioBuffer` at `sampleRate`; if `contextId` differs from the current one, `stopNow()` first; schedule at `max(ctx.currentTime, nextStart)`. Empty pcm (the `done` chunk) is skipped. `stopNow()`: `gain.linearRampToValueAtTime(0, t + 0.03)`, stop sources at `t + 0.03`, then restore gain to 1 for the next context.
-- App: Start button (AudioContext needs a user gesture) opens `ws://<host>/ws`, starts capture, creates the player. Shows the current partial (large), finalized turns above, the current `turnId`, a scrolling log of event types with `+ms`, and TTFA = `turn_end` arrival → `onFirstAudio` for the reply's context, plus the server `metric ttfa`. On `turn_start`, call `player.stopNow()` (barge-in over a reply). Keep styles inline and minimal; Lane D owns the real HUD.
+- App: Start button (AudioContext needs a user gesture) opens `ws://<host>/ws`, starts capture, creates the player. Shows the current partial (large), finalized turns above, the current `turnId`, a scrolling log of event types with `+ms`, and TTFA = `turn_end` arrival → `onFirstAudio` for the reply's context, plus the server `metric ttfa`. On `turn_start`, call `player.stopNow()` (harmless while the mic is muted during replies; keeps the hook for a browser-reported clock later). Keep styles inline and minimal; Lane D owns the real HUD.
+
+Scope (human, 2026-10-23): build the code and verify everything that does not need a human at the mic, then stop and leave a spoken-test checklist. The human runs the spoken test.
 
 - [ ] **Step 1: Implement worklet, capture, playback, page, proxy.**
-- [ ] **Step 2: Checks** — `pnpm -r build && pnpm -r lint`.
-- [ ] **Step 3: Manual run** — server `pnpm --filter @ahead/server dev`, web `pnpm --filter @ahead/web dev`, open the page in Chrome, click Start, say "Move my Friday meeting with Priya to Monday morning." Expected: partials grow word by word, a finalized line appears at turn end, the canned reply is heard. Do 3 utterances. Then restart the server with `AHEAD_MOCK_BELIEF=1`, speak utterance 1, and confirm the interjection plays over you and transcription of your continued sentence resumes in the same turn after 1.5 s. Speak again while a reply is playing and confirm it cuts out within ~30 ms.
-- [ ] **Step 4: Record in `docs/sdk-notes.md`** (new "Lane A live measurements" under Ink/Sonic): browser partial cadence, browser-observed TTFA for the 3 utterances, interjection behavior and any echo/self-transcription seen.
-- [ ] **Step 5: Commit** — `feat(web): mic capture, PCM playback and bare voice page`
+- [ ] **Step 2: Checks** — `pnpm -r build && pnpm -r lint && pnpm --filter @ahead/server test`.
+- [ ] **Step 3: Verify without a mic** — server and `pnpm --filter @ahead/web dev` running; load the page in Chrome (claude-in-chrome): no console errors on load, the `/ws` proxy connects (server logs the connection), the worklet file is served at `/pcm-capture-worklet.js`. With the server in `AHEAD_MOCK_BELIEF=1` and the headless smoke running in a separate connection, confirm nothing breaks on the page. Exercise `PcmPlayer` from the page console with a synthetic 24 kHz sine (enqueue two contexts, confirm `stopNow` and `onFirstAudio` fire, no exceptions).
+- [ ] **Step 4: Commit** — `feat(web): mic capture, PCM playback and bare voice page`
+- [ ] **Step 5: Hand off a spoken-test checklist** to the human: start commands, the three utterances, what to look and listen for (partials word by word, canned reply heard, TTFA readout, interjection with `AHEAD_MOCK_BELIEF=1`, mic resuming ~300 ms after audio ends, no self-transcription of the reply), and which numbers to paste into `docs/sdk-notes.md` ("Lane A live measurements").
