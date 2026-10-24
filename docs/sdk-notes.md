@@ -401,3 +401,67 @@ A/B with the stricter verdict, 3 runs each way (16 changed partials, 50 queries 
 - Sequential gives honest per-query numbers (each query's time is its own), so the tracker runs queries in sequence.
 - In sequential runs the first query of a step is usually the slowest (10 to 25 ms) and the rest take 2 to 6 ms. Hypothesis, not shown: the first query after an idle gap pays a warm-up cost, or shares the event loop with Haiku responses landing at the same time. The standalone spike measured about 2 ms per query with nothing else running.
 - The replay verdict now also requires: the lock lands before the Thursday partial arrives (not just attributed to an earlier partial), the interject lands before the next partial arrives, the lock is `draft_message` with person `Priya Shah`, and the interject text is exactly `Heads up, Priya's meeting is Friday, not Thursday. Say Friday?`.
+### Executor (Lane C)
+
+Live smoke: `pnpm --filter @ahead/server smoke:executor` (`apps/server/scripts/smoke-executor.ts`). A real `Speculator` over `createDroidExecutor`, fed `turn_start`, a fixture `reschedule_event` belief (Priya Q3 review, Friday 2 PM to Monday 2026-11-02 9:00 AM, confidence 0.86), `turn_eager_end`, `turn_end` and a confirm. Run A confirms (commit), Run B rejects (rollback). It forces `AHEAD_WORKSPACE=~/.ahead/workspace-executor` so it never touches `~/.ahead/workspace`, and resets that workspace before each run and at the end. The script waits for Phase 1 to finish before sending eager end, so the two phases time separately. In the live server, eager end can land while Phase 1 is still running.
+
+Both runs passed twice on 2026-10-24 (claude-haiku-5-5, droid CLI v0.249.0). Every run: one `diff` event for `calendar.json` only (471 characters), `evt-priya-q3` moved to `2026-11-02T09:00:00-08:00` / `10:00:00-08:00` (correct PST offset after the DST change, no template fix needed), no denied tool calls, every event valid, workspace clean on `main` with no `spec/*` branch after commit and after rollback, and `calendar.json` byte-identical to the seed after rollback.
+
+| ms | Run 1 commit (pre-TodoWrite-fix) | Run 1 rollback (pre-TodoWrite-fix) | Run 2 commit | Run 2 rollback |
+|---|---|---|---|---|
+| createSession (first in process / later) | 762 | 447 | 794 | 530 |
+| createSession (warm after commit or rollback) | 594 | 767 | 549 | 572 |
+| Phase 1 (prepare branch + turn + commit) | 14475 | 7289 | 8236 | 16564 |
+| Phase 2 (turn + commit) | 14575 | 12269 | 11065 | 12753 |
+| diff (git) | 28 | 24 | 37 | 27 |
+| belief lock to diff | 29078 | 19582 | 19339 | 29345 |
+| commit / rollback | 1729 | 1618 | 936 | 1939 |
+
+- `createSession` was 447 to 794 ms across all eight sessions, in either process. No clear cold/warm split.
+- Phase 2 is mostly the model checking its own work. The Edit lands 3.8 to 6.4 s into the turn, then the model re-Reads `calendar.json`, updates its TodoWrite plan and writes a summary, and the turn ends at 11 to 14.5 s. The diff is only emitted after the turn ends, so about half of Phase 2 is post-edit. A "stop after the edit" line in the template is the obvious lever; not tried yet.
+- Phase 1 varies from 7 to 16.5 s for the same prompt. The Read lands at 3.1 to 4.0 s; the rest is model time after it (TodoWrite plus reply text).
+- `commit` and `rollback` include `session.close()` (1 to 2 s, as in the spike). The git part is tens of ms.
+- **TodoWrite input is a string, not an array.** The CLI schema is `TodoWriteToolInputSchema = { todos: z.string() }` (`@factory/droid-sdk` `dist/chunk-TWAVPIPS.mjs`), and the model sends checklist lines like `1. [completed] Read calendar.json`. The SDK's own `parseTodos` also accepts arrays and a JSON-array string, but it isn't exported. Run 1 emitted every `plan` event with `steps=0` because `turn.ts` only read arrays; `turn.ts` now parses all those shapes (`todoSteps`, regression test in `turn.test.ts`), and Run 2 showed 4 to 5 steps per plan.
+- No edits in Phase 1 in any run (Phase 1 only Read and TodoWrite), and the model never called a disabled tool.
+- After commit or rollback the state machine warms a fresh session. `DroidExecutor.close()` shuts it down so a script or a server shutdown can exit cleanly. `close()` is terminal: afterwards `warm()` opens nothing and phases throw `SpeculationFailed('executor closed')`.
+
+#### After latency fixes
+
+Three more smoke runs on 2026-10-24 after two changes: every Phase 2 template now says `Stop immediately after the edit. Do not re-read the file or update the plan.` (find_file: reply with the path), and the executor emits the diff as soon as a Create/Edit/ApplyPatch result returns (`git add -A` plus `git diff --cached main` on the working tree), instead of at turn end. All six runs passed. Each emitted exactly one `diff` event (`calendar.json`, 471 characters): the end-of-phase diff matched the early one, so nothing was re-emitted. No denied tool calls.
+
+`phase2-to-first-diff` runs from `turn_eager_end` to the first `diff` event. `lock-to-first-diff` runs from the belief lock to that event. `lock-to-diff` runs to the `result` event, where the old turn-end diff used to go, so it lines up with the earlier "belief lock to diff" row.
+
+| ms | Run 1 commit | Run 1 rollback | Run 2 commit | Run 2 rollback | Run 3 commit | Run 3 rollback |
+|---|---|---|---|---|---|---|
+| createSession | 793 | 526 | 745 | 570 | 794 | 639 |
+| Phase 1 | 7224 | 7204 | 6842 | 6867 | 16598 | 6219 |
+| Phase 2 | 10765 | 10971 | 10376 | 12133 | 14767 | 11476 |
+| phase2-to-first-diff | 3757 | 3416 | 3365 | 5323 | 4435 | 4630 |
+| lock-to-first-diff | 10981 | 10620 | 10207 | 12190 | 21034 | 10849 |
+| lock-to-diff | 18017 | 18209 | 17242 | 19026 | 31387 | 17725 |
+| commit / rollback | 1616 | 1351 | 1482 | 1045 | 1221 | 1489 |
+
+Before/after: the diff used to reach the HUD 19.3 to 29.3 s after the belief lock (Phase 2 11.1 to 14.6 s). It now arrives 10.2 to 21.0 s after the lock, 3.4 to 5.3 s into Phase 2.
+
+- The stop line cut the post-edit tool calls but not the post-edit time. In 5 of 6 runs Phase 2 made no tool call after the Edit, yet the turn still ended 6.8 to 7.5 s after the Edit result: that's reply text only. Phase 2 as a whole (10.4 to 14.8 s) is about the same as before, so the early diff is what moved the number.
+- Run 3 commit: the model still called TodoWrite after the Edit (+13.4 s), ignoring "do not update the plan". Its Phase 1 also took 16.6 s with two TodoWrite calls, which is what pushed that run's lock-to-first-diff to 21 s.
+- The early diff and the committed diff are byte-identical for a modified file and for a new file (`git.test.ts` checks both), which is why the end-of-phase pass re-emits nothing.
+
+#### STAGED when the edit lands (R25)
+
+- `STAGED` now fires when Phase 2's edit lands, not when the Droid turn ends. Each successful Create/Edit/ApplyPatch result commits the working tree on `spec/<turnId>` (`phase2-edit`), emits the changed `diff` events, and the first one moves the state machine to `STAGED`. A Phase 2 with no edit (for example `find_file`) still stages when its turn ends.
+- The turn keeps running in the background, and its end is informational: on success it still emits any changed final diff and `result {ok:true, summary}`. A confirm in `STAGED` commits right away. If the turn is still running, the commit interrupts it, resets the branch to the staged commit (dropping any later half-landed edit) and merges, so `main` gets exactly the diff the HUD showed. That superseded turn emits no `result`.
+- If the turn fails after staging, the executor emits `droid_event kind:'result' payload {ok:false, failed:true, summary:'droid turn failed after staging'}`. The state stays `STAGED`, there's no rollback, and the staged diff can still be applied. The HUD should mark the diff stale.
+- `DroidResultPayload` in contracts is still `{ok, summary}` and doesn't declare `failed`. The wire schema accepts it because `payload` is `unknown`. Lane D should read `failed` defensively (`(payload as {failed?: boolean}).failed === true`) until the human updates contracts.
+- One live smoke run on 2026-10-24 passed both runs. Run A confirmed as soon as `STAGED` showed, and the commit interrupted the live Phase 2 turn 5.9 s in. main then held exactly the staged `calendar.json` change, with a clean tree and no `spec/*`. Run B (rollback) was unchanged. No `failed:true` result appeared in either run.
+
+| ms | Commit | Rollback |
+|---|---|---|
+| createSession | 1212 | 1778 |
+| Phase 1 | 11957 | 8472 |
+| phase2-to-first-diff | 5870 | 5195 |
+| lock-to-staged | 17827 | 13667 |
+| lock-to-diff (turn-end result) | n/a (turn superseded by commit) | 21334 |
+| commit / rollback | 1846 | 1769 |
+
+`lock-to-staged` matches `lock-to-first-diff` to within 1 ms. In the rollback run, `STAGED` came 7.7 s before the turn ended.

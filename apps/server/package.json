@@ -16,7 +16,8 @@
     "spike:moss": "MOSS_DISABLE_TELEMETRY=1 node --env-file=../../.env --import tsx scripts/spike-moss.ts",
     "spike:droid": "node --env-file=../../.env --import tsx scripts/spike-droid.ts",
     "smoke:sonic-ws": "node --env-file=../../.env --import tsx scripts/smoke-sonic-ws.ts",
-    "smoke:voice": "node --import tsx scripts/smoke-voice.ts"
+    "smoke:voice": "node --import tsx scripts/smoke-voice.ts",
+    "smoke:executor": "node --env-file=../../.env --import tsx scripts/smoke-executor.ts"
   },
   "dependencies": {
     "@ahead/contracts": "workspace:*",
