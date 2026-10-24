@@ -12,6 +12,7 @@ import { createDroidExecutor } from './executor/droid-executor.js';
 import { Speculator } from './executor/speculator.js';
 import type { Emit } from './executor/types.js';
 import { MossIndex } from './moss/index.js';
+import { SwitchableRetriever } from './moss/cloud-sim.js';
 import { Orchestrator, type DemoPort } from './orchestrator.js';
 import { HaikuAnswerer } from './reply.js';
 import { InkClient } from './voice/ink-client.js';
@@ -22,6 +23,8 @@ import { SonicClient } from './voice/sonic-client.js';
 const PORT = Number(process.env.AHEAD_SERVER_PORT ?? 8787);
 const DEMO_MODE = process.env.DEMO_MODE === '1';
 const MOCK_BELIEF = DEMO_MODE && process.env.AHEAD_MOCK_BELIEF === '1';
+// Diagnostics: fixtures drive the utterance, real Ink hears the mic (spoken-confirm trials).
+const LIVE_INK = !DEMO_MODE || process.env.DEMO_LIVE_INK === '1';
 
 const errMessage = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
@@ -39,7 +42,7 @@ async function main(): Promise<void> {
   const { contacts } = JSON.parse(readFileSync(contactsFile, 'utf8')) as { contacts: { name: string }[] };
 
   // Warm-up before listening: the first utterance must not pay for cold starts.
-  const moss = await MossIndex.load();
+  const moss = await MossIndex.load(undefined, { memory: true });
   await moss.query('warmup');
   const llm = new HaikuIntentLlm();
   await llm.classify({ partial: 'warmup', topHits: [] });
@@ -85,7 +88,7 @@ async function main(): Promise<void> {
       send: (e) => session.handleTts(e),
       onCancel: (id) => clock.onCancel(id, Date.now()),
     });
-    const inkClient = DEMO_MODE
+    const inkClient = !LIVE_INK
       ? null
       : new InkClient({
           apiKey,
@@ -101,9 +104,11 @@ async function main(): Promise<void> {
       mockBelief: MOCK_BELIEF,
       onTurnEnd: (turnId, finalText) => orch.onVoiceTurnEnd(turnId, finalText),
     });
+    // Per connection: the HUD's retrieval A/B toggle switches this tracker only.
+    const retriever = new SwitchableRetriever(moss);
     const tracker = MOCK_BELIEF
       ? null
-      : new BeliefTracker({ retriever: moss, llm, contacts, emit: (e) => orch.onTrackerEvent(e) });
+      : new BeliefTracker({ retriever, llm, contacts, emit: (e) => orch.onTrackerEvent(e) });
     // Not start()ed: the executor is already warm.
     const speculator = new Speculator(executor, (e) => orch.onSpeculatorEvent(e));
 
@@ -133,7 +138,18 @@ async function main(): Promise<void> {
         }
       : null;
 
-    const orch = new Orchestrator({ send, voice: session, tracker, speculator, speaker: sonic, answerer, demo });
+    const orch = new Orchestrator({
+      send,
+      voice: session,
+      tracker,
+      speculator,
+      speaker: sonic,
+      answerer,
+      demo,
+      mic: LIVE_INK,
+      memory: moss.memory,
+      retrieval: retriever,
+    });
     let tornDown = false;
     const teardown = (): void => {
       if (tornDown) return;
@@ -182,7 +198,7 @@ async function main(): Promise<void> {
   wss.on('error', onListenError);
 
   http.listen(PORT, 'localhost', () => {
-    const tags = `${DEMO_MODE ? ' DEMO_MODE' : ''}${MOCK_BELIEF ? ' mock belief' : ''}`;
+    const tags = `${DEMO_MODE ? ' DEMO_MODE' : ''}${DEMO_MODE && LIVE_INK ? ' live ink' : ''}${MOCK_BELIEF ? ' mock belief' : ''}`;
     console.log(`[server] listening ws://localhost:${PORT}/ws${tags}`);
   });
 }

@@ -1,4 +1,12 @@
-import type { Belief, ServerEvent, State } from '@ahead/contracts';
+import {
+  MEMORY_DOC_PREFIX,
+  RETRIEVAL_MODES,
+  type Belief,
+  type MossHit,
+  type RetrievalMode,
+  type ServerEvent,
+  type State,
+} from '@ahead/contracts';
 
 export type ToolCall = { tool: string; path?: string; denied: boolean; reason?: string };
 export type DroidResult = { ok: boolean; summary: string; failed: boolean };
@@ -31,6 +39,8 @@ export type HudState = {
   result: DroidResult | null;
   ttfa: { client?: number; server?: number }; // reset at turn_end
   confirm: ConfirmTarget | null; // the server is listening for a yes / no (confirm_window metric)
+  retrieval: RetrievalMode; // confirmed by the server's retrieval:<mode> metric; kept across resets
+  interjectLag: Partial<Record<RetrievalMode, number>>; // last interject_lag:<mode> metric per mode; kept across resets
   error: string | null;
 };
 export type ConfirmTarget = { kind: 'correction' | 'apply'; turnId: string };
@@ -57,6 +67,8 @@ export function initialHud(): HudState {
     result: null,
     ttfa: {},
     confirm: null,
+    retrieval: 'moss',
+    interjectLag: {},
     error: null,
   };
 }
@@ -109,6 +121,20 @@ function confirmTarget(s: HudState, label: string, ms: number): ConfirmTarget | 
 }
 
 /** What a yes / no answers right now. The mock never sends confirm_window: there it is staged work after the turn ended. */
+function retrievalMode(v: string): RetrievalMode | null {
+  return (RETRIEVAL_MODES as readonly string[]).includes(v) ? (v as RetrievalMode) : null;
+}
+
+/** Hits retrieved from conversation memory (Moss `ahead-memory`), tagged "memory" in the Moss panel. */
+export function isMemoryHit(h: MossHit): boolean {
+  return h.docId.startsWith(MEMORY_DOC_PREFIX);
+}
+
+/** The Moss panel's hits: the top 3, plus any memory hits ranked below them. */
+export function panelHits(topHits: MossHit[]): MossHit[] {
+  return [...topHits.slice(0, 3), ...topHits.slice(3).filter(isMemoryHit)];
+}
+
 export function pendingConfirm(s: HudState, mode: 'live' | 'mock', running: boolean): ConfirmTarget | null {
   if (mode === 'live') return running ? s.confirm : null;
   const staged =
@@ -187,7 +213,8 @@ function applyDroid(s: HudState, e: Extract<ServerEvent, { type: 'droid_event' }
 export function hudReducer(s: HudState, a: HudAction): HudState {
   switch (a.type) {
     case 'reset':
-      return initialHud();
+      // The retrieval A/B readout compares runs, so it outlives a demo reset.
+      return { ...initialHud(), retrieval: s.retrieval, interjectLag: s.interjectLag };
     case 'client_ttfa':
       return { ...s, ttfa: { ...s.ttfa, client: a.ms } };
     case 'turn_start':
@@ -237,6 +264,14 @@ export function hudReducer(s: HudState, a: HudAction): HudState {
       return applyDroid(s, a);
     case 'metric':
       if (a.label.startsWith('confirm_window')) return { ...s, confirm: confirmTarget(s, a.label, a.ms) };
+      if (a.label.startsWith('retrieval:')) {
+        const m = retrievalMode(a.label.slice('retrieval:'.length));
+        return m ? { ...s, retrieval: m } : s;
+      }
+      if (a.label.startsWith('interject_lag:')) {
+        const m = retrievalMode(a.label.slice('interject_lag:'.length));
+        return m ? { ...s, interjectLag: { ...s.interjectLag, [m]: a.ms } } : s;
+      }
       return a.source === 'sonic' && a.label === 'ttfa'
         ? { ...s, ttfa: { ...s.ttfa, server: a.ms } }
         : s;

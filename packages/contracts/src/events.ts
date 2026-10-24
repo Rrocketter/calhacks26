@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { BeliefSchema, MossHitSchema, StateSchema } from './belief.js';
+import { RETRIEVAL_MODES } from './moss.js';
 
 export const ClientEventSchema = z.discriminatedUnion('type', [
   z.object({
@@ -18,6 +19,8 @@ export const ClientEventSchema = z.discriminatedUnion('type', [
     turnId: z.string(),
     apply: z.boolean(),
   }),
+  // The server answers with metric `retrieval:<mode>`; interject lag arrives as `interject_lag:<mode>`.
+  z.object({ type: z.literal('retrieval_mode'), mode: z.enum(RETRIEVAL_MODES) }),
 ]);
 export type ClientEvent = z.infer<typeof ClientEventSchema>;
 

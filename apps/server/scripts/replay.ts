@@ -3,14 +3,17 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import type { Belief, ServerEvent } from '@ahead/contracts';
+import { MossClient } from '@moss-js/moss';
+import { RETRIEVAL_MODES, type Belief, type RetrievalMode, type ServerEvent } from '@ahead/contracts';
 import { loadFixture, mockInkStream } from '@ahead/contracts/mocks/node';
-import { REPO_ROOT } from '../src/env.js';
+import { REPO_ROOT, requireEnv } from '../src/env.js';
 import { HaikuIntentLlm } from '../src/belief/haiku.js';
 import { normalize } from '../src/belief/normalize.js';
 import { BeliefTracker } from '../src/belief/tracker.js';
 import type { Retriever } from '../src/belief/types.js';
-import { MossIndex } from '../src/moss/index.js';
+import { ALPHA, MossIndex } from '../src/moss/index.js';
+import { SwitchableRetriever } from '../src/moss/cloud-sim.js';
+import { generateCorpus } from './gen-corpus.js';
 
 export type ReplayResult = {
   lockAtMs?: number;
@@ -204,6 +207,7 @@ export function printVerdict(tap: ReplayTap, said: string, print: Line): boolean
   print(`locked:    ${lockB ? `${lockB.intent} person=${lockB.entities.person ?? '-'}` : 'none'}`);
   print(`said:      ${tap.interject ? JSON.stringify(tap.interject.text) : 'none'}`);
   const saidAt = saidIdx >= 0 ? tap.partials[saidIdx]!.atMs : NaN;
+  if (tap.interject && saidIdx >= 0) print(`interject lag: ${Math.round(tap.interject.atMs - saidAt)}ms after the ${said.toLowerCase()} partial`);
   const nextAt = saidIdx >= 0 ? (tap.partials[saidIdx + 1]?.atMs ?? Infinity) : NaN;
   const checks: [string, boolean][] = [
     [`${said.toLowerCase()} partial found`, saidIdx >= 0],
@@ -228,11 +232,17 @@ async function main(): Promise<void> {
   const speed = speedArg ? Number(speedArg.slice('--speed='.length)) : 1;
   if (!Number.isFinite(speed) || speed <= 0) throw new Error(`bad --speed: ${speedArg}`);
 
+  const retrievalArg = args.find((a) => a.startsWith('--retrieval='))?.slice('--retrieval='.length) ?? 'moss';
+  if (!(RETRIEVAL_MODES as readonly string[]).includes(retrievalArg)) throw new Error(`bad --retrieval: ${retrievalArg}`);
+  const localCorpus = args.includes('--local-corpus');
+
   const contactsFile = path.join(REPO_ROOT, 'workspace-seed', 'contacts.json');
   const { contacts } = JSON.parse(readFileSync(contactsFile, 'utf8')) as { contacts: { name: string }[] };
 
   // Warm-up outside timing, as at server startup.
-  const moss = await MossIndex.load();
+  const moss = localCorpus ? await loadLocalCorpus() : await MossIndex.load();
+  const retriever = new SwitchableRetriever(moss);
+  retriever.mode = retrievalArg as RetrievalMode;
   try {
     await moss.query('warmup');
     const llm = new HaikuIntentLlm();
@@ -240,20 +250,43 @@ async function main(): Promise<void> {
 
     const tap = new ReplayTap();
     const tracker = new BeliefTracker({
-      retriever: tap.wrap(moss),
+      retriever: tap.wrap(retriever),
       llm,
       contacts,
       emit: tap.emit,
       today: () => new Date(),
     });
     const print = (line: string) => console.log(line);
-    print(`[replay] fixture=${fixture} speed=${speed}`);
+    print(`[replay] fixture=${fixture} speed=${speed} retrieval=${retriever.mode}${localCorpus ? ' corpus=local synthetic' : ''}`);
     await runReplay({ fixture, speed, tracker, tap, print });
     const pass = printVerdict(tap, 'Thursday', print);
     if (!pass) process.exitCode = 1;
   } finally {
     await moss.close();
   }
+}
+
+/**
+ * The synthetic corpus (gen-corpus, in memory) in an in-process Moss session index that is never
+ * pushed: real Moss retrieval for the demo fixtures now that ahead-corpus holds imported data.
+ */
+async function loadLocalCorpus(): Promise<Retriever & { close(): Promise<void> }> {
+  const client = new MossClient(requireEnv('MOSS_PROJECT_ID'), requireEnv('MOSS_PROJECT_KEY'));
+  const t = performance.now();
+  const session = await client.session('ahead-replay-local');
+  await session.addDocs(generateCorpus().map((d) => ({ id: d.id, text: d.text, metadata: { ...d.metadata } })));
+  console.log(`[moss] local synthetic corpus ${session.docCount} docs ${(performance.now() - t).toFixed(0)}ms`);
+  return {
+    async query(text, opts) {
+      if (!text.trim()) return { hits: [], latencyMs: 0 };
+      const start = performance.now();
+      const res = await session.query(text, { alpha: ALPHA, topK: opts?.k ?? 5 });
+      const latencyMs = performance.now() - start;
+      const hits = res.docs.map((d) => ({ docId: d.id, score: d.score, snippet: d.text.slice(0, 160), metadata: d.metadata ?? {} }));
+      return { hits, latencyMs };
+    },
+    close: () => client.close(),
+  };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

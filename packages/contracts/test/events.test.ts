@@ -40,6 +40,12 @@ describe('parseServerEvent', () => {
 });
 
 describe('parseClientEvent', () => {
+  it('accepts retrieval_mode moss and cloud-sim only', () => {
+    expect(parseClientEvent(JSON.stringify({ type: 'retrieval_mode', mode: 'moss' }))).not.toBeNull();
+    expect(parseClientEvent(JSON.stringify({ type: 'retrieval_mode', mode: 'cloud-sim' }))).not.toBeNull();
+    expect(parseClientEvent(JSON.stringify({ type: 'retrieval_mode', mode: 'pinecone' }))).toBeNull();
+  });
+
   it('accepts confirm_action and rejects non-boolean apply', () => {
     const ok = { type: 'confirm_action', turnId: 't1', apply: true };
     expect(parseClientEvent(JSON.stringify(ok))).toEqual(ok);
@@ -55,5 +61,6 @@ describe('constants', () => {
   it('MOSS_INDEX names', () => {
     expect(MOSS_INDEX.spike).toBe('ahead-spike');
     expect(MOSS_INDEX.corpus).toBe('ahead-corpus');
+    expect(MOSS_INDEX.memory).toBe('ahead-memory');
   });
 });

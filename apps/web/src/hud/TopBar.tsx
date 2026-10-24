@@ -1,3 +1,4 @@
+import { CLOUD_SIM_MS, RETRIEVAL_MODES, type RetrievalMode } from '@ahead/contracts';
 import { pendingConfirm, type HudState } from './state';
 import { LevelMeter, Tween } from './motion';
 
@@ -9,6 +10,7 @@ type Props = {
   onStart(): void;
   onStop(): void;
   onDemo(): void;
+  onRetrieval(mode: RetrievalMode): void;
 };
 
 type CounterProps = { label: string; short: string; value: number | null; digits?: number; unit?: string };
@@ -29,7 +31,34 @@ function Counter({ label, short, value, digits = 0, unit }: CounterProps) {
   );
 }
 
-export function TopBar({ hud, mode, running, starting, onStart, onStop, onDemo }: Props) {
+const seconds = (ms: number | undefined) => (ms === undefined ? '-' : `${(ms / 1000).toFixed(1)} s`);
+
+/** Retrieval A/B: Moss in process vs the same results after a simulated cloud round trip, with interject lag per mode. */
+function RetrievalToggle({ hud, enabled, onPick }: { hud: HudState; enabled: boolean; onPick(m: RetrievalMode): void }) {
+  return (
+    <div className="retrieval" role="group" aria-label="Retrieval A/B">
+      <span className="label" title="Interject lag: first partial with the contradicted word to the interject">
+        Retrieval · interject lag
+      </span>
+      <div className="seg">
+        {RETRIEVAL_MODES.map((m) => (
+          <button
+            key={m}
+            className={hud.retrieval === m ? 'seg-btn on' : 'seg-btn'}
+            aria-pressed={hud.retrieval === m}
+            disabled={!enabled}
+            onClick={() => onPick(m)}
+          >
+            {m === 'moss' ? 'Moss' : `Cloud-sim +${CLOUD_SIM_MS}`}
+            <span className="lag num">{seconds(hud.interjectLag[m])}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function TopBar({ hud, mode, running, starting, onStart, onStop, onDemo, onRetrieval }: Props) {
   const { count, totalMs } = hud.moss;
   const avg = count ? totalMs / count : null;
   const ttfa = hud.ttfa.client ?? hud.ttfa.server;
@@ -60,6 +89,7 @@ export function TopBar({ hud, mode, running, starting, onStart, onStop, onDemo }
         <Counter label="Avg retrieval" short="Avg" value={avg} digits={1} unit="ms" />
         <Counter label="Time to first audio" short="TTFA" value={ttfa === undefined ? null : Math.round(ttfa)} unit="ms" />
       </div>
+      <RetrievalToggle hud={hud} enabled={mode === 'live' && running} onPick={onRetrieval} />
       <span className="spacer" />
       {mode === 'live' && running && <LevelMeter />}
       <div className="controls">

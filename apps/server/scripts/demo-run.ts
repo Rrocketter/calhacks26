@@ -223,7 +223,7 @@ ws.on('open', async () => {
     const subject = git('log', '-1', '--format=%s', 'main').trim();
     changed.push(...git('diff-tree', '--no-commit-id', '--name-only', '-r', 'main').split('\n').filter(Boolean));
     console.log(`--- workspace main: ${subject} ---\n${git('show', 'main', '--stat')}`);
-    if (finalState === 'COMMITTED') priya = git('show', 'main:messages/outbox/priya.md');
+    if (finalState === 'COMMITTED' && fixture.includes('utterance-1')) priya = git('show', 'main:messages/outbox/priya.md');
   } catch (err) {
     problems.push(`workspace git failed: ${(err as Error).message.split('\n')[0]}`);
   }

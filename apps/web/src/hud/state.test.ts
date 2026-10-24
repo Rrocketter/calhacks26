@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Belief, ServerEvent } from '@ahead/contracts';
-import { findWord, hudReducer, initialHud, pendingConfirm, type HudAction, type HudState } from './state';
+import { findWord, hudReducer, initialHud, isMemoryHit, panelHits, pendingConfirm, type HudAction, type HudState } from './state';
 
 const TEXT = "Draft a message to Priya saying, I'll see her Thursday";
 
@@ -218,5 +218,31 @@ describe('hudReducer', () => {
     s = run([{ type: 'turn_end', turnId: 't1', ts: 0 }], s);
     expect(s.ttfa).toEqual({});
     expect(run([{ type: 'reset' }], s)).toEqual(initialHud());
+  });
+});
+
+describe('memory hits in the Moss panel', () => {
+  const hit = (docId: string) => ({ docId, score: 0.5, snippet: docId });
+  it('tags memory docs by id prefix', () => {
+    expect(isMemoryHit(hit('memory-t-1-artifact'))).toBe(true);
+    expect(isMemoryHit(hit('contact-priya'))).toBe(false);
+  });
+  it('shows the top 3 plus memory hits ranked below them', () => {
+    const ids = panelHits(['c1', 'c2', 'c3', 'memory-a', 'c4', 'memory-b'].map(hit)).map((h) => h.docId);
+    expect(ids).toEqual(['c1', 'c2', 'c3', 'memory-a', 'memory-b']);
+    expect(panelHits(['memory-a', 'c1', 'c2', 'c3'].map(hit)).map((h) => h.docId)).toEqual(['memory-a', 'c1', 'c2']);
+  });
+});
+
+describe('retrieval A/B', () => {
+  const metric = (label: string, ms: number): ServerEvent => ({ type: 'metric', source: 'moss', label, ms });
+  it('tracks the confirmed mode and the last interject lag per mode, across a demo reset', () => {
+    const s = run([metric('retrieval:cloud-sim', 300), metric('interject_lag:cloud-sim', 2100), metric('interject_lag:moss', 400)]);
+    expect(s.retrieval).toBe('cloud-sim');
+    expect(s.interjectLag).toEqual({ 'cloud-sim': 2100, moss: 400 });
+    const r = hudReducer(s, { type: 'reset' });
+    expect(r.retrieval).toBe('cloud-sim');
+    expect(r.interjectLag).toEqual({ 'cloud-sim': 2100, moss: 400 });
+    expect(run([metric('retrieval:pinecone', 0)]).retrieval).toBe('moss');
   });
 });

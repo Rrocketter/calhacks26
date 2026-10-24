@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import type { Belief, Claim, MossHit } from '@ahead/contracts';
 import { normalize } from './belief/normalize.js';
 import { resolveDay } from './belief/entities.js';
+import { SUPERSEDED_PREFIX, escapeRegExp } from './executor/prompts.js';
 import { requireEnv } from './env.js';
 import { logLatency } from './log.js';
 
@@ -55,10 +56,25 @@ export function claimForInterject(belief: Belief, text: string): Claim | undefin
   return belief.claims.find((c) => t.includes(c.known.toLowerCase()));
 }
 
+/** Slots computed from `day` by resolveDay, never edited as text. */
+const DERIVED = new Set(['weekday', 'date_iso']);
+
+/**
+ * The belief with an accepted correction applied. The corrected value becomes the only value: it
+ * replaces the claim's field and the spoken word inside any other slot (e.g. a message body), and
+ * the spoken value is kept only as `superseded_<field>` so Phase 2 can say "do not mention it".
+ */
 export function correctBelief(belief: Belief, claim: Claim, today: Date): Belief {
-  const entities = { ...belief.entities };
   const known = normalize(claim.known);
+  const said = normalize(claim.said);
+  const word = said ? new RegExp(`\\b${escapeRegExp(said)}\\b`, 'gi') : null;
+  const entities: Record<string, string> = {};
+  for (const [k, v] of Object.entries(belief.entities)) {
+    const free = !k.startsWith(SUPERSEDED_PREFIX) && !DERIVED.has(k);
+    entities[k] = word && free ? v.replace(word, claim.known.trim()) : v;
+  }
   entities[claim.field] = known;
+  if (said && said !== known) entities[`${SUPERSEDED_PREFIX}${claim.field}`] = said;
   if (claim.field === 'day') {
     try {
       Object.assign(entities, resolveDay(known, today));

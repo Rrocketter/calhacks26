@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Belief, Intent } from '@ahead/contracts';
-import { loadTemplate, phase1Prompt, phase2Prompt } from './prompts.js';
+import { correctionFixPrompt, loadTemplate, mentionedSuperseded, phase1Prompt, phase2Prompt } from './prompts.js';
 
 const CLOSING = 'Do not run commands. Do not touch files outside this workspace.';
 const SPECULATIVE: Intent[] = ['reschedule_event', 'draft_message', 'find_file', 'add_note'];
@@ -146,4 +146,36 @@ test('draft_message phase2 forbids a sign-off and names other than the recipient
   const p2 = phase2Prompt(belief('draft_message', { person: 'Priya Shah' }), NOW);
   assert.match(p2, /No sign-off and no signature/);
   assert.match(p2, /Name no one except the recipient unless the details above name them\./);
+});
+
+const CORRECTED = { person: 'Priya', day: 'friday', weekday: 'friday', message: "I'll see her Friday at 2", superseded_day: 'thursday' };
+
+test('phase2 with an accepted correction: the superseded value is no slot, and a correction line forbids it', () => {
+  const p = phase2Prompt(belief('draft_message', CORRECTED), NOW);
+  assert.ok(!p.includes('superseded_day'));
+  assert.match(p, /^day: friday$/m);
+  assert.match(
+    p,
+    /^Correction: the user originally said thursday, this was corrected to friday\. Use friday only and do not mention thursday\.$/m,
+  );
+  assert.equal(p.match(/thursday/g)?.length, 2); // only in the correction line
+  assert.ok(!phase2Prompt(belief('draft_message', { day: 'friday' }), NOW).includes('Correction:'));
+});
+
+test('correctionFixPrompt repeats the correction and asks for one edit', () => {
+  const p = correctionFixPrompt(belief('draft_message', CORRECTED), NOW);
+  assert.match(p, /^Today is 2026-10-24/);
+  assert.match(p, /do not mention thursday/);
+  assert.ok(p.endsWith(CLOSING));
+});
+
+test('mentionedSuperseded checks added lines, whole words, any case, and skips bare numbers', () => {
+  const b = belief('draft_message', CORRECTED);
+  const diff = (lines: string[]) => [{ diff: ['--- a/x', '+++ b/x', ...lines].join('\n') }];
+  assert.equal(mentionedSuperseded(diff(["+Hi Priya, I'll see you Thursday."]), b), 'thursday');
+  assert.equal(mentionedSuperseded(diff(['-Old line Thursday', "+Hi Priya, I'll see you Friday."]), b), null);
+  assert.equal(mentionedSuperseded(diff(['+Thursdays are busy? no: Thursdayish']), b), null);
+  assert.equal(mentionedSuperseded(diff(['+Thursday']), belief('draft_message', { day: 'thursday' })), null);
+  const time = belief('reschedule_event', { time: '3', superseded_time: '2' });
+  assert.equal(mentionedSuperseded(diff(['+"start": "2026-10-26T09:00:00-07:00"']), time), null);
 });

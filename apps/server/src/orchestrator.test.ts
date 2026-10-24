@@ -1,8 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import type { Belief, Claim, ClientEvent, MossHit, ServerEvent, State } from '@ahead/contracts';
+import type { Belief, Claim, ClientEvent, MossHit, RetrievalMode, ServerEvent, State } from '@ahead/contracts';
 import { CONFIRM_WINDOW_MS, CORRECTION_TIMEOUT_MS, Orchestrator, type TrackerPort } from './orchestrator.js';
 import { APPLIED_REPLY, DISCARDED_REPLY, FALLBACK_REPLY } from './reply.js';
+import type { MemoryDoc } from './moss/memory.js';
 
 type Call = { name: string; args: unknown[] };
 type Opts = {
@@ -21,6 +22,10 @@ type Opts = {
   gate?: Promise<void>;
   /** tracker.onEagerEnd waits for this before resolving (the eager text's Moss step). */
   eagerGate?: Promise<void>;
+  /** Record memory writes in `mem`. */
+  memory?: boolean;
+  /** The tracker's switchable retriever. */
+  retrieval?: { mode: RetrievalMode; readonly delayMs: number };
 };
 
 const belief = (intent: Belief['intent'], entities: Record<string, string> = {}, claims: Claim[] = []): Belief => ({
@@ -40,6 +45,7 @@ function setup(opts: Opts = {}) {
   const ws: ServerEvent[] = [];
   const specEvents: ServerEvent[] = [];
   const spoken: { text: string; opts: { interrupt: boolean; turnId: string } }[] = [];
+  const mem: MemoryDoc[] = [];
   const rec = (name: string, args: unknown[]) => calls.push({ name, args });
   const tracker: TrackerPort = {
     onUpdate: async (t, text) => void rec('tracker.onUpdate', [t, text]),
@@ -85,11 +91,15 @@ function setup(opts: Opts = {}) {
     today: () => new Date(2026, 9, 24), // Saturday
     correctionTimeoutMs: opts.correctionTimeoutMs ?? 10_000,
     confirmWindowMs: opts.confirmWindowMs ?? 10_000,
+    memory: opts.memory ? { add: async (d) => void mem.push(d) } : null,
+    retrieval: opts.retrieval ?? null,
   });
   const names = () => calls.map((c) => c.name);
   const specTypes = () => specEvents.map((e) => `${e.type}:${'turnId' in e ? e.turnId : ''}`);
   const texts = () => spoken.map((s) => s.text);
-  return { orch, calls, ws, specEvents, spoken, names, specTypes, texts };
+  /** Latest written version of each memory doc, by id. */
+  const memDocs = () => new Map(mem.map((d) => [d.id, d]));
+  return { orch, calls, ws, specEvents, spoken, mem, memDocs, names, specTypes, texts };
 }
 
 type S = ReturnType<typeof setup>;
@@ -775,4 +785,103 @@ test('a turn_resume before the tracker finishes drops the delayed eager end', as
   open();
   await settle();
   assert.deepEqual(s.specTypes(), ['turn_start:t1', 'turn_resume:t1']);
+});
+
+// ---- conversation memory ----
+
+const PRIYA_DIFF = '--- /dev/null\n+++ b/messages/outbox/priya.md\n@@ -0,0 +1,3 @@\n+To: Priya Shah <priya.shah@example.com>\n+\n+Hi Priya, see you Friday.';
+const diffEv = (t: string, file: string, diff: string): ServerEvent => ({ type: 'droid_event', turnId: t, kind: 'diff', payload: { file, diff }, ts: 1 });
+
+test('memory: a staged turn is written at turn end, then upserted with its outcome and the committed draft', async () => {
+  const s = setup({ memory: true, autoState: true, finalBelief: () => belief('draft_message', { person: 'Priya Shah' }) });
+  await stagedTurn(s);
+  assert.equal(s.memDocs().get('memory-t1')?.metadata.outcome, 'staged');
+  assert.match(s.memDocs().get('memory-t1')!.text, /^User said: "Draft a message to Priya" Understood: draft_message person=Priya Shah\. Outcome: staged\.$/);
+  s.orch.onSpeculatorEvent(diffEv('t1', 'messages/outbox/priya.md', 'stale'));
+  s.orch.onSpeculatorEvent(diffEv('t1', 'messages/outbox/priya.md', PRIYA_DIFF));
+  s.orch.onClient({ type: 'confirm_action', turnId: 't1', apply: true });
+  const docs = s.memDocs();
+  assert.equal(docs.get('memory-t1')?.metadata.outcome, 'committed');
+  assert.equal(
+    docs.get('memory-t1-artifact')?.text,
+    'Told Priya Shah in a message on 2026-10-24. messages/outbox/priya.md: To: Priya Shah <priya.shah@example.com> Hi Priya, see you Friday.',
+  );
+});
+
+test('memory: a rolled-back turn is upserted as rolled back and stores no artifact', async () => {
+  const s = setup({ memory: true, autoState: true, finalBelief: () => belief('draft_message', { person: 'Priya Shah' }) });
+  await stagedTurn(s);
+  s.orch.onSpeculatorEvent(diffEv('t1', 'messages/outbox/priya.md', PRIYA_DIFF));
+  s.orch.onClient({ type: 'confirm_action', turnId: 't1', apply: false });
+  assert.equal(s.memDocs().get('memory-t1')?.metadata.outcome, 'rolled back');
+  assert.equal(s.memDocs().has('memory-t1-artifact'), false);
+});
+
+test('memory: a lookup is remembered as a lookup, and its dropped speculation does not change that', async () => {
+  const s = setup({ memory: true, finalBelief: () => belief('lookup', { person: 'Priya' }) });
+  begin(s, 't1', 'What did I tell Priya?');
+  s.orch.onSpeculatorEvent(sc('t1', 'SPECULATING'));
+  s.orch.onVoiceEvent(end('t1'));
+  s.orch.onVoiceTurnEnd('t1', 'What did I tell Priya?');
+  await settle();
+  s.orch.onSpeculatorEvent(sc('t1', 'ROLLED_BACK'));
+  assert.equal(s.mem.length, 1);
+  assert.equal(s.mem[0]!.metadata.outcome, 'lookup');
+  assert.equal(s.mem[0]!.metadata.people, 'Priya');
+});
+
+test('memory: a bare yes/no and a spoken confirm write nothing of their own', async () => {
+  const s = setup({ memory: true, autoState: true, finalBelief: () => belief('draft_message', { person: 'Priya Shah' }) });
+  utter(s, 't0', 'Yes.');
+  await settle();
+  assert.equal(s.mem.length, 0);
+  await stagedTurn(s);
+  utter(s, 't2', 'Yes.');
+  await settle();
+  assert.deepEqual([...s.memDocs().keys()], ['memory-t1']);
+  assert.equal(s.memDocs().get('memory-t1')?.metadata.outcome, 'committed');
+});
+
+test('memory: an unknown request is remembered as no action; nothing is written without a memory port', async () => {
+  const s = setup({ memory: true });
+  utter(s, 't1', 'What is the weather');
+  await settle();
+  assert.equal(s.mem[0]?.metadata.outcome, 'no action');
+  const quiet = setup();
+  utter(quiet, 't1', 'What is the weather');
+  await settle();
+  assert.equal(quiet.mem.length, 0);
+});
+
+// ---- retrieval A/B ----
+
+const metricsOf = (s: S, prefix: string) =>
+  s.ws.flatMap((e) => (e.type === 'metric' && e.label.startsWith(prefix) ? [`${e.label}=${e.ms}`] : []));
+
+test('retrieval_mode switches the retriever and confirms with a retrieval:<mode> metric', () => {
+  const retrieval = { mode: 'moss' as RetrievalMode, delayMs: 300 };
+  const s = setup({ retrieval });
+  s.orch.onClient({ type: 'retrieval_mode', mode: 'cloud-sim' });
+  assert.equal(retrieval.mode, 'cloud-sim');
+  s.orch.onClient({ type: 'retrieval_mode', mode: 'moss' });
+  assert.equal(retrieval.mode, 'moss');
+  assert.deepEqual(metricsOf(s, 'retrieval:'), ['retrieval:cloud-sim=300', 'retrieval:moss=0']);
+  const none = setup();
+  none.orch.onClient({ type: 'retrieval_mode', mode: 'cloud-sim' });
+  assert.ok(none.ws.some((e) => e.type === 'error'));
+});
+
+test('interject lag: time from the first partial with the contradicted word, labelled with the mode', async () => {
+  const retrieval = { mode: 'cloud-sim' as RetrievalMode, delayMs: 300 };
+  const s = setup({ retrieval });
+  begin(s, 't1', 'Draft a message to Priya saying');
+  s.orch.onVoiceEvent(partial('t1', "Draft a message to Priya saying I'll see her Thursday"));
+  const saidAt = Date.now();
+  s.orch.onVoiceEvent(partial('t1', "Draft a message to Priya saying I'll see her Thursday at 2"));
+  s.orch.onTrackerEvent(bu('t1', draft('thursday')));
+  await new Promise((r) => setTimeout(r, 40));
+  s.orch.onTrackerEvent({ type: 'interject', turnId: 't1', text: INTERJECT });
+  const lag = s.ws.find((e) => e.type === 'metric' && e.label === 'interject_lag:cloud-sim');
+  assert.ok(lag && lag.type === 'metric');
+  assert.ok(lag.ms >= 39 && lag.ms <= Date.now() - saidAt + 5, String(lag.ms));
 });

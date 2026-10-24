@@ -9,7 +9,7 @@ import { REPO_ROOT, WORKSPACE_DIR } from '../env.js';
 import { logLatency } from '../log.js';
 import { WorkspaceGit } from './git.js';
 import { makeGuard, type Guard } from './guard.js';
-import { phase1Prompt, phase2Prompt } from './prompts.js';
+import { correctionFixPrompt, mentionedSuperseded, phase1Prompt, phase2Prompt } from './prompts.js';
 import { openDroidSession, writeSandboxSettings } from './sandbox.js';
 import { makePermissionHandler, runTurn, type PermissionHandler } from './turn.js';
 import { redact, SpeculationFailed, type DroidLike, type Emit, type Executor, type Phase2Hooks } from './types.js';
@@ -277,6 +277,11 @@ export class DroidExecutor implements Executor {
             const diffs = await this.git.diffWorkingTree();
             if (superseded()) return;
             if (diffs.length === 0 || diffs.every((d) => emitted.get(d.file) === d.diff)) return;
+            // Never show or stage an edit that still mentions a value the user corrected.
+            if (mentionedSuperseded(diffs, belief) !== null) {
+              console.log('[droid] write mentions a superseded value, not staged');
+              return;
+            }
             const sha = await this.git.commitAll('phase2-edit');
             // A commit or reset that arrived during commitAll resets the branch to the previous staged sha.
             if (superseded()) return;
@@ -291,22 +296,37 @@ export class DroidExecutor implements Executor {
           .catch((e: unknown) => console.log(`[droid] early diff failed (${e instanceof Error ? e.name : 'unknown'})`));
         return writes;
       };
-      this.running = { turnId, phase: 'phase2' };
-      const r = await this.timed(s, 'phase2', () =>
-        runTurn(s, phase2Prompt(belief, now), {
-          turnId,
-          guard: this.guard,
-          emit: this.opts.emit,
-          graceMs: this.opts.graceMs,
-          onWrite,
-        }),
-      ).finally(() => {
-        this.running = null;
-      });
-      // No early-diff git work may overlap commitAll, a reset or a rollback.
-      await writes;
+      const run = async (label: string, prompt: string) => {
+        this.running = { turnId, phase: 'phase2' };
+        const out = await this.timed(s, label, () =>
+          runTurn(s, prompt, {
+            turnId,
+            guard: this.guard,
+            emit: this.opts.emit,
+            graceMs: this.opts.graceMs,
+            onWrite,
+          }),
+        ).finally(() => {
+          this.running = null;
+        });
+        // No early-diff git work may overlap commitAll, a reset or a rollback.
+        await writes;
+        return out;
+      };
+      let r = await run('phase2', phase2Prompt(belief, now));
       if (superseded()) return;
       if (r.outcome !== 'success') return this.failPhase2(turnId, `phase2 ${r.outcome}`);
+      // Post-check: a draft that still mentions a corrected value is rejected and rerun once.
+      if (mentionedSuperseded(await this.git.diffWorkingTree(), belief) !== null) {
+        console.log('[droid] phase2 draft mentions a superseded value, rerunning once');
+        this.metric('phase2-reject', performance.now() - t0);
+        r = await run('phase2-fix', correctionFixPrompt(belief, now));
+        if (superseded()) return;
+        if (r.outcome !== 'success') return this.failPhase2(turnId, `phase2 fix ${r.outcome}`);
+        if (mentionedSuperseded(await this.git.diffWorkingTree(), belief) !== null) {
+          return this.failPhase2(turnId, 'phase2 draft still mentions a superseded value');
+        }
+      }
       let diffs: { file: string; diff: string }[];
       try {
         await this.git.commitAll('phase2');

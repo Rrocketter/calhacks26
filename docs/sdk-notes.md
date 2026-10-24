@@ -4,7 +4,7 @@ Numbers are measured output from the spike scripts, not estimates. Earlier runs 
 
 ## Summary for lanes
 
-- Moss: load `ahead-spike` / `ahead-corpus` at server startup (3-index cap, no other names). Queries are in-process, about 2 ms p50. Never call `loadIndex` on the request path (2 to 20 s).
+- Moss: load `ahead-corpus` and the `ahead-memory` session at server startup (3-index cap, no other names). Queries are in-process, about 2 ms p50. Never call `loadIndex` on the request path (2 to 20 s).
 - Ink 2: `turn.update` is cumulative, one about every 250 ms. `turn.eager_end` = finalize speculation, `turn.resume` = un-finalize (same turn), `turn.end` = close. Normalize numbers and punctuation before intent matching.
 - Sonic: use the WebSocket for the product (`/tts/bytes` is spike-only, TTFB 370 to 550 ms), model `sonic-3.6`, new `context_id` per reply. Cancel only stops ungenerated audio, so also drop late chunks and flush playback.
 - Droid: the workspace lives outside the repo (`~/.ahead/workspace`, `AHEAD_WORKSPACE` override), and Lane C must refuse a workspace located under the repo (`reset:workspace` already refuses; the executor does not exist yet).
@@ -86,9 +86,33 @@ Top-3 by `alpha` (hybrid weight, lower = more keyword):
 
 ### Index names (rule)
 
-- The free plan allows 3 indexes total.
-- The only allowed index names are `ahead-spike` (spikes) and `ahead-corpus` (Lane B owns it), both exported from `MOSS_INDEX` in `@ahead/contracts`.
+- The free plan allows 3 indexes total. The project also holds `product-search-context` (not ours; leave it alone), so only 2 slots are ours.
+- Our names are `ahead-corpus` (Lane B owns it) and `ahead-memory` (conversation memory), both exported from `MOSS_INDEX` in `@ahead/contracts`. `ahead-spike` was deleted on 2026-10-24 to make room for `ahead-memory`; `spike:moss` recreates it, so delete `ahead-memory` first if you need to run it.
 - No lane creates any other index.
+
+### Conversation memory (`ahead-memory`, 2026-10-24)
+
+- **Incremental upsert exists.** `client.session(name)` returns a `SessionIndex` whose `addDocs(docs, {upsert})` embeds and indexes in process (upsert is the default), and `query` sees the doc at once. No rebuild of a second index is needed. `pnpm --filter @ahead/server spike:memory` measures it.
+- **`pushIndex` only creates.** With the project at the 3-index cap, `pushIndex` on an index that already exists fails with "The project's usage limit has been reached; billing must be updated" (`UNAUTHORIZED`), even from a fresh session. Replacing seems to need a temporary extra slot. The first push (creating the index) works. After that, cloud `client.addDocs(name, docs, {upsert: true})` works; it polls until the server rebuild finishes.
+- **`session.loadIndex` of a missing index** resolves to 0 docs, no error. The store checks `getIndex` first and skips the load when the index is absent.
+- **Scores are not comparable across indexes.** For "what did I tell priya", the 2-doc memory index scored 0.48 to 0.64 and the corpus 0.07 to 0.39. Merging by score would let memory push the corpus out. `MossIndex.query` keeps the corpus top 3 (the interject's strong-hit ranks), then up to 2 memory hits with `minScore` 0.3, then the rest of the corpus, capped at k.
+- **What is written** (`apps/server/src/moss/memory.ts`, orchestrator):
+  - After each turn end: `memory-<turnId>` with the final transcript, a one-line belief summary and the outcome (`committed`, `rolled back`, `lookup`, `staged`, `no action`). It is upserted when a staged turn commits or rolls back. Bare yes/no turns write nothing.
+  - After each COMMITTED: `memory-<turnId>-artifact` with the added lines of the turn's last diff per file (the draft text) or "changed X to Y" (the calendar edit).
+  - Metadata `{type: 'memory', date, people, outcome}`. Memory snippets are 400 chars (corpus 160) so a lookup answer sees the committed text. The HUD tags `memory-` hits "memory" and always shows them in the Moss panel.
+- **Measured:**
+
+  | Step | Time |
+  | --- | --- |
+  | `client.session()` at startup | 1.0 to 2.0 s (20.8 s once) |
+  | `session.loadIndex` at startup, 0 docs / 11 docs | 0.6 s / 7.3 s (one slow run; corpus `loadIndex` was 18.7 s in the same run) |
+  | in-process `addDocs` (upsert), per doc | 7 to 47 ms |
+  | memory `query` | 3 to 10 ms, run in parallel with the corpus query |
+  | first `pushIndex` (creates the index) | 1.6 to 2.6 s, off the hot path |
+  | cloud `addDocs` upsert (rebuild), 1 doc | 2.9 to 3.9 s (10 s once), off the hot path |
+
+- **DEMO_MODE check:** `demo:run demo-utterance-1 --confirm=spoken`, then `memory:check` (fixture `demo-lookup-priya`, "What did I tell Priya?"). PASS in 2 of 2 runs: the final belief was `lookup` with `memory-<turn>-artifact` in its hits, first memory hit 0.8 s into the turn. The spoken answer: "You told Priya Shah in a message on October 24 that you'd see her Friday, October 30 at 2 to go over the Q3 deck." With memory populated, utterance 1 still interjects at about 3.1 s.
+- Memory persists across server restarts. To start clean, delete the `ahead-memory` index.
 
 ## Cartesia Sonic (TTS)
 
@@ -502,3 +526,46 @@ All times are from the fixture's `turn_start`. `merge done` runs from STAGED to 
 - **Sonic slow first chunk is not a reconnect:** every slow first chunk (555, 813, 1054, 1254 ms) came on an already-open socket, 13 to 20 s after its last use, with no `[sonic] connect` in between. So no keepalive or reconnect was added. The cause is still unknown.
 
 **Fix-wave re-run (2026-10-24, clean workspace, spoken confirms):** utterance 1 lock 2281, interject 3020, first droid_event 6043, STAGED 14792, merge done +2250, PASS (draft says Friday, no sign-off). Utterance 2 lock 2267, first droid_event 5734, STAGED 19088, merge done +2629, PASS (`2026-10-26T09:00-07:00`). The spoken yes acted 2 ms after its first partial, about 150 ms before `turn_end`. Live `smoke:voice` PASS; interject TTFA 93.5 ms, unanswered correction released at 4 s.
+
+### Spoken-confirm trials (2026-10-24)
+
+`DEMO_MODE=1 DEMO_LIVE_INK=1` keeps real Ink on in DEMO_MODE: fixtures drive the utterance, the mic goes to Ink. `scripts/confirm-trials.ts --wav=yes.wav --delay=N` plays demo-utterance-2 to "Apply?", streams silence frames like a live mic, and splices a 0.48 s "yes" (macOS `say`, Samantha, 16 kHz) in N ms after the prompt audio ends, estimated the way the server's playback clock does. Hit = COMMITTED within 8 s of the yes.
+
+| Tail | Delay | Hits | Notes |
+| --- | --- | --- | --- |
+| 300 ms | 400 ms | 10/10 | first frame forwarded 7 to 84 ms after mute end; first Ink update 1.2 to 2.2 s after the yes started |
+| 300 ms | 0 ms | 0/5 | no Ink update and no turn at all: the mute dropped the first ~300 ms of the word |
+| 100 ms | 400 ms | 10/10 | |
+| 100 ms | 0 ms | 5/5 | first update 1.0 to 2.8 s after the yes started |
+
+- Dominant failure mode: a quick "yes" that starts inside the mute tail loses its first syllable and Ink emits nothing (no `turn.update`, no `turn.end`). No trial showed a `turn.end` with no update.
+- Fix applied: `PLAYBACK_TAIL_MS` 300 to 100. The browser mic runs with `echoCancellation: true`. Not yet checked on speakers at the mic for self-transcription.
+- Ink needs 1.0 to 2.8 s from the start of a one-word "yes" to its first update, so a spoken confirm lands about 1.5 s after the user speaks. The confirm card's Y / Enter is instant.
+- Diagnostics in the server log: `[voice] dropped N mic frames; first frame forwarded +Xms after mute end`, `[voice] first update <turn> +Xms after mute end "<text>"`, `[voice] turn.end with no update <turn>`.
+
+
+### Retrieval A/B: Moss vs cloud-sim (2026-10-24)
+
+- **Switch:** the HUD top bar has a Retrieval toggle (Moss / Cloud-sim +300). It sends client event `retrieval_mode`. The server switches that connection's `SwitchableRetriever` (`apps/server/src/moss/cloud-sim.ts`) and confirms with metric `retrieval:<mode>`. Cloud-sim returns the same Moss results after a 300 ms sleep per query (`CLOUD_SIM_MS`), so only latency differs. It is a comparison, labelled cloud-sim everywhere, never a backend.
+- **Interject lag:** the time from the first partial containing the contradicted word ("Thursday") to the interject. The orchestrator sends it as metric `interject_lag:<mode>`, and the HUD shows the last value per mode under each toggle option (kept across demo resets). The replay prints it as `interject lag`.
+- **Measured** with `replay --local-corpus --retrieval=<mode>` on demo-utterance-1, 3 runs each, real Moss (synthetic corpus in an in-process session index) and real Haiku:
+
+  | Retrieval | Interject lag after "Thursday" | Interject from turn start | Moss step per partial p50 / p95 |
+  | --- | --- | --- | --- |
+  | Moss (in process) | 12 to 17 ms | 3.02 to 3.03 s | 10 to 13 ms / 17 to 27 ms |
+  | Cloud-sim (+300 ms per query) | 3.7 to 4.1 s | 6.8 to 7.2 s | 911 to 925 ms / 1.53 s |
+
+- Why cloud-sim is so much worse than 300 ms: the tracker runs 1 to 4 queries per partial one after another, and partials arrive every 250 ms. At 300 ms a query, each partial's step takes 0.3 to 1.2 s, the steps queue up, and the interject lands after the sentence is over (the fixture ends at about 5 s). With Moss the interject lands on the "Thursday" partial itself, before the next one.
+- **Corpus note:** `ahead-corpus` was rebuilt at 11:29 on 2026-10-24 with 321 imported Google docs (`g-email-*`, `g-contact-*`, `g-evt-*`), and `data/corpus/corpus.json` is gone. `evt-priya-q3` is no longer in the index, so demo-utterance-1 no longer locks or interjects against `ahead-corpus` (`replay` fails, `demo:run` fails "no interject"). `replay --local-corpus` uses the synthetic corpus from `generateCorpus()` in memory, without writing `data/corpus` or touching the cloud. The fixtures need re-recording on the real data.
+
+### Correction wording fix (2026-10-24)
+
+- **Bug:** after an accepted correction (Thursday to Friday), Haiku's free-form entities could still hold the spoken words in another slot (e.g. `message: "I'll see her Thursday at 2..."`). `correctBelief` fixed only `day`/`weekday`/`date_iso`, so Phase 2 got both days.
+- **Fix:**
+  - `correctBelief` makes the corrected value the only value. It replaces the spoken word in every free-text slot (not `weekday`/`date_iso`, which `resolveDay` sets) and records `superseded_<field>`.
+  - Phase 2 drops `superseded_*` from the slots and adds: "Correction: the user originally said thursday, this was corrected to friday. Use friday only and do not mention thursday."
+  - Post-check in the executor: an edit whose added lines name the superseded value (whole word, any case; values with a letter only) is not shown or staged. After the turn, such a draft gets one fix turn (metric `phase2-reject`). If it still names the value, Phase 2 fails rather than stage it.
+- **Measured** with `scripts/correction-trials.ts` (real Droid, Phase 1 and Phase 2 on a fresh seed workspace, utterance 1's belief with the spoken message slot, correction applied by `correctBelief`):
+  - With the fix: **5/5 pass** (Friday, no Thursday). The post-check never had to rerun, so the prompt alone was enough. 18 to 29 s per trial.
+  - Control (`--control`, the old correction): 0/5. Every draft said Thursday and none said Friday.
+- The DEMO_MODE fixture path could not be used for this: with the new corpus, utterance 1 never interjects (see the corpus note above).
