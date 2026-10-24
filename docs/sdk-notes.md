@@ -333,3 +333,22 @@ Before/after: the diff used to reach the HUD 19.3 to 29.3 s after the belief loc
 - The stop line cut the post-edit tool calls but not the post-edit time. In 5 of 6 runs Phase 2 made no tool call after the Edit, yet the turn still ended 6.8 to 7.5 s after the Edit result: that's reply text only. Phase 2 as a whole (10.4 to 14.8 s) is about the same as before, so the early diff is what moved the number.
 - Run 3 commit: the model still called TodoWrite after the Edit (+13.4 s), ignoring "do not update the plan". Its Phase 1 also took 16.6 s with two TodoWrite calls, which is what pushed that run's lock-to-first-diff to 21 s.
 - The early diff and the committed diff are byte-identical for a modified file and for a new file (`git.test.ts` checks both), which is why the end-of-phase pass re-emits nothing.
+
+#### STAGED when the edit lands (R25)
+
+- `STAGED` now fires when Phase 2's edit lands, not when the Droid turn ends. Each successful Create/Edit/ApplyPatch result commits the working tree on `spec/<turnId>` (`phase2-edit`), emits the changed `diff` events, and the first one moves the state machine to `STAGED`. A Phase 2 with no edit (for example `find_file`) still stages when its turn ends.
+- The turn keeps running in the background, and its end is informational: on success it still emits any changed final diff and `result {ok:true, summary}`. A confirm in `STAGED` commits right away. If the turn is still running, the commit interrupts it, resets the branch to the staged commit (dropping any later half-landed edit) and merges, so `main` gets exactly the diff the HUD showed. That superseded turn emits no `result`.
+- If the turn fails after staging, the executor emits `droid_event kind:'result' payload {ok:false, failed:true, summary:'droid turn failed after staging'}`. The state stays `STAGED`, there's no rollback, and the staged diff can still be applied. The HUD should mark the diff stale.
+- `DroidResultPayload` in contracts is still `{ok, summary}` and doesn't declare `failed`. The wire schema accepts it because `payload` is `unknown`. Lane D should read `failed` defensively (`(payload as {failed?: boolean}).failed === true`) until the human updates contracts.
+- One live smoke run on 2026-10-24 passed both runs. Run A confirmed as soon as `STAGED` showed, and the commit interrupted the live Phase 2 turn 5.9 s in. main then held exactly the staged `calendar.json` change, with a clean tree and no `spec/*`. Run B (rollback) was unchanged. No `failed:true` result appeared in either run.
+
+| ms | Commit | Rollback |
+|---|---|---|
+| createSession | 1212 | 1778 |
+| Phase 1 | 11957 | 8472 |
+| phase2-to-first-diff | 5870 | 5195 |
+| lock-to-staged | 17827 | 13667 |
+| lock-to-diff (turn-end result) | n/a (turn superseded by commit) | 21334 |
+| commit / rollback | 1846 | 1769 |
+
+`lock-to-staged` matches `lock-to-first-diff` to within 1 ms. In the rollback run, `STAGED` came 7.7 s before the turn ended.
