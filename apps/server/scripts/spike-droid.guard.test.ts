@@ -15,7 +15,7 @@ fs.symlinkSync('/etc', path.join(ws, 'etclink'));
 fs.symlinkSync(path.join(ws, 'notes'), path.join(ws, 'notes-link'));
 process.env.AHEAD_WORKSPACE = ws;
 
-const { insideWorkspace, inputPaths, patchPaths, resolveStrict } = await import('./spike-droid.js');
+const { droidChildEnv, insideWorkspace, inputPaths, patchPaths, resolveStrict } = await import('./spike-droid.js');
 
 test.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
@@ -54,4 +54,13 @@ test('inputPaths covers glob prefixes, path arrays, and unknown path-like keys',
   assert.deepEqual(inputPaths({ paths: ['a', '/etc/x'], cmd: '../x' }).paths, ['a', '/etc/x', '../x']);
   assert.deepEqual(inputPaths({ other: 'notes/../../x' }).paths, ['notes/../../x']);
   assert.deepEqual(inputPaths({ content: 'a/b text', file_path: 'notes/x.md' }).paths, ['notes/x.md']);
+});
+
+test('droidChildEnv survives the SDK merge with only allowlisted keys', () => {
+  const parent = { FACTORY_API_KEY: 'fk', PATH: '/bin', HOME: '/h', CARTESIA_API_KEY: 'c', MOSS_PROJECT_KEY: 'm', ANTHROPIC_API_KEY: 'a', LANG: undefined };
+  // Same merge as @factory/droid-sdk@0.10.0 ProcessManager: {...process.env, ...config.env}.
+  const merged: Record<string, string | undefined> = { ...parent, ...droidChildEnv(parent) };
+  // child_process.spawn drops undefined values.
+  const child = Object.fromEntries(Object.entries(merged).filter(([, v]) => v !== undefined));
+  assert.deepEqual(child, { FACTORY_API_KEY: 'fk', PATH: '/bin', HOME: '/h' });
 });

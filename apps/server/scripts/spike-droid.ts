@@ -67,6 +67,20 @@ const WRITES_PROMPT = [
 const readPrompt = (p: string): string =>
   `Read the file ${p}. Reply only with whether the read succeeded and its byte count. Never repeat or quote its contents.`;
 
+// Env for the droid CLI child. @factory/droid-sdk@0.10.0 spawns with {...process.env, ...env}
+// (dist/node.mjs ProcessManager, sanitizeSpawnEnv is a no-op), so passing an allowlist alone
+// would still forward every other key (CARTESIA/MOSS/ANTHROPIC keys under --env-file). Every
+// non-allowlisted key is set to undefined, which child_process.spawn drops from the child env.
+// The SDK then adds FACTORY_API_KEY and FACTORY_UPSTREAM_* itself.
+export const DROID_ENV_ALLOWLIST = ['FACTORY_API_KEY', 'PATH', 'HOME', 'TMPDIR', 'LANG', 'USER', 'SHELL'] as const;
+export function droidChildEnv(src: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const env: Record<string, string | undefined> = {};
+  for (const key of Object.keys(src)) env[key] = undefined;
+  for (const key of DROID_ENV_ALLOWLIST) if (src[key] !== undefined) env[key] = src[key];
+  // The SDK type says Record<string, string>; undefined values are intentional (see above).
+  return env as Record<string, string>;
+}
+
 type PermissionParams = Parameters<NonNullable<NonNullable<Parameters<typeof createSession>[0]>['permissionHandler']>>[0];
 type SettingsWithEnabled = Parameters<DroidSession['updateSettings']>[0] & { enabledToolIds?: string[] };
 
@@ -307,6 +321,7 @@ function writeSandboxSettings(dir: string): string {
 async function openSession(modelId: string, t0: number, rs: RunState, settingsFile: string | null, abort: AbortController): Promise<DroidSession> {
   const session = await createSession({
     cwd: WORKSPACE_DIR,
+    env: droidChildEnv(),
     modelId,
     autonomyLevel: AutonomyLevel.Off,
     disabledToolIds: DISABLED_TOOLS,
@@ -505,6 +520,7 @@ async function pickModel(settingsFile: string | null): Promise<string> {
   try {
     const s = await createSession({
       cwd: WORKSPACE_DIR,
+      env: droidChildEnv(),
       modelId: PREFERRED_MODEL,
       autonomyLevel: AutonomyLevel.Off,
       disabledToolIds: DISABLED_TOOLS,
@@ -515,7 +531,7 @@ async function pickModel(settingsFile: string | null): Promise<string> {
     return PREFERRED_MODEL;
   } catch (e) {
     if (!isModelRejected(e)) throw e;
-    const ids = (await listModels({ cwd: WORKSPACE_DIR })).map((m) => String((m as { id?: unknown }).id));
+    const ids = (await listModels({ cwd: WORKSPACE_DIR, env: droidChildEnv() })).map((m) => String((m as { id?: unknown }).id));
     console.log(`[droid] model ${PREFERRED_MODEL} rejected; listModels: ${ids.join(', ')}`);
     const fallback = ids.find((id) => /haiku/i.test(id)) ?? ids.find((id) => /sonnet/i.test(id));
     if (!fallback) throw new Error('no Claude Haiku/Sonnet model listed', { cause: e });
