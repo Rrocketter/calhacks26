@@ -8,7 +8,8 @@ import { inputPaths, patchPaths, type Guard } from './guard.js';
 import type { DroidLike, Emit } from './types.js';
 
 type PermissionParams = Parameters<NonNullable<NonNullable<Parameters<typeof createSession>[0]>['permissionHandler']>>[0];
-export type PermissionHandler = (params: PermissionParams) => ToolConfirmationOutcome;
+// ProceedEdit is excluded so the handler is assignable to the SDK's permissionHandler type.
+export type PermissionHandler = (params: PermissionParams) => Exclude<ToolConfirmationOutcome, ToolConfirmationOutcome.ProceedEdit>;
 
 export type TurnOutcome = 'success' | 'interrupted' | 'aborted' | 'error';
 export interface TurnOptions {
