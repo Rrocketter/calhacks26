@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint . && tsc --noEmit -p .",
-    "test": "echo 'no tests yet'"
+    "test": "vitest run"
   },
   "dependencies": {
     "@ahead/contracts": "workspace:*",
@@ -19,6 +19,7 @@
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "@vitejs/plugin-react": "6.1.2",
-    "vite": "8.3.5"
+    "vite": "8.3.5",
+    "vitest": "4.1.12"
   }
 }
