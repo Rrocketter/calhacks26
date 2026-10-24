@@ -108,9 +108,15 @@ function utter(s: S, t: string, text: string) {
   if (text.trim() !== '') s.orch.onVoiceTurnEnd(t, text.trim());
 }
 
+/** A turn that has started and shown real speech (a bare turn_start may be an Ink phantom). */
+function begin(s: S, t: string, text = 'Draft a message to Priya') {
+  s.orch.onVoiceEvent(start(t));
+  s.orch.onVoiceEvent(partial(t, text));
+}
+
 /** Turn t1 speculates a draft to Priya and is STAGED after its turn end. */
 async function stagedTurn(s: S) {
-  s.orch.onVoiceEvent(start('t1'));
+  begin(s, 't1');
   s.orch.onSpeculatorEvent(sc('t1', 'LISTENING'));
   s.orch.onTrackerEvent(bu('t1', belief('draft_message', { person: 'Priya Shah' })));
   s.orch.onSpeculatorEvent(sc('t1', 'SPECULATING'));
@@ -140,17 +146,17 @@ test('routes partial, eager_end, resume, turn_end to tracker and speculator per 
 
 test('belief_update and moss_hits from the tracker reach ws and speculator', () => {
   const s = setup();
-  s.orch.onVoiceEvent(start('t1'));
+  begin(s, 't1');
   s.orch.onTrackerEvent(bu('t1', belief('lookup')));
   s.orch.onTrackerEvent({ type: 'moss_hits', turnId: 't1', query: 'q', hits: [], latencyMs: 2 });
   s.orch.onTrackerEvent({ type: 'metric', source: 'moss', label: 'query', ms: 2 });
   assert.deepEqual(s.specTypes(), ['turn_start:t1', 'belief_update:t1', 'moss_hits:t1']);
-  assert.deepEqual(s.ws.map((e) => e.type), ['turn_start', 'belief_update', 'moss_hits', 'metric']);
+  assert.deepEqual(s.ws.map((e) => e.type), ['turn_start', 'transcript_partial', 'belief_update', 'moss_hits', 'metric']);
 });
 
 test('tracker interject calls voice.handleInterject and is not sent to ws directly', () => {
   const s = setup();
-  s.orch.onVoiceEvent(start('t1'));
+  begin(s, 't1');
   s.orch.onTrackerEvent({ type: 'interject', turnId: 't1', text: 'Say Friday?' });
   assert.deepEqual(s.calls.find((c) => c.name === 'voice.handleInterject')?.args, ['t1', 'Say Friday?']);
   assert.equal(s.ws.filter((e) => e.type === 'interject').length, 0);
@@ -165,10 +171,13 @@ test('repeated turn_start emits one synthetic turn_end for the old turn to ws, s
   s.orch.onVoiceEvent(partial('t1', 'move my meeting'));
   s.orch.onVoiceEvent(start('t2'));
   await settle();
+  // t2's turn_start reaches the speculator only once it shows speech (it may be an Ink phantom).
+  assert.deepEqual(s.specTypes(), ['turn_start:t1', 'turn_end:t1']);
+  s.orch.onVoiceEvent(partial('t2', 'and'));
   assert.deepEqual(s.specTypes(), ['turn_start:t1', 'turn_end:t1', 'turn_start:t2']);
   assert.deepEqual(
     s.ws.map((e) => `${e.type}:${'turnId' in e ? e.turnId : ''}`),
-    ['turn_start:t1', 'transcript_partial:t1', 'turn_end:t1', 'turn_start:t2'],
+    ['turn_start:t1', 'transcript_partial:t1', 'turn_end:t1', 'turn_start:t2', 'transcript_partial:t2'],
   );
   const ends = s.calls.filter((c) => c.name === 'tracker.onTurnEnd');
   assert.deepEqual(ends.map((c) => c.args), [['t1', 'move my meeting']]);
@@ -207,7 +216,7 @@ test('empty answer speaks the fallback', async () => {
 
 test('speculative intent while SPECULATING speaks nothing at turn end; STAGED later speaks "I drafted a message to Priya. Apply?"', async () => {
   const s = setup({ finalBelief: () => belief('draft_message', { person: 'Priya Shah' }) });
-  s.orch.onVoiceEvent(start('t1'));
+  begin(s, 't1');
   s.orch.onTrackerEvent(bu('t1', belief('draft_message', { person: 'Priya Shah' })));
   s.orch.onSpeculatorEvent(sc('t1', 'SPECULATING'));
   s.orch.onVoiceEvent(final('t1', 'Draft a message to Priya'));
@@ -224,7 +233,7 @@ test('speculative intent while SPECULATING speaks nothing at turn end; STAGED la
 
 test('STAGED before turn end speaks at turn end', async () => {
   const s = setup({ finalBelief: () => belief('draft_message', { person: 'Priya Shah' }) });
-  s.orch.onVoiceEvent(start('t1'));
+  begin(s, 't1');
   s.orch.onTrackerEvent(bu('t1', belief('draft_message', { person: 'Priya Shah' })));
   s.orch.onSpeculatorEvent(sc('t1', 'SPECULATING'));
   s.orch.onSpeculatorEvent(sc('t1', 'STAGED'));
@@ -344,10 +353,11 @@ test('close() while STAGED calls onConfirm(turn, false) and voice.close()', asyn
 
 test('close() while idle does not call onConfirm', () => {
   const s = setup();
-  s.orch.onVoiceEvent(start('t1'));
+  begin(s, 't1');
   s.orch.onSpeculatorEvent(sc('t1', 'LISTENING'));
   s.orch.close();
-  assert.deepEqual(s.names(), ['voice.close']);
+  assert.ok(s.names().includes('voice.close'));
+  assert.ok(!s.names().includes('spec.onConfirm'));
 });
 
 // ---- interject correction ----
@@ -357,7 +367,7 @@ const draft = (day: string, claims: Claim[] = [DAY_CLAIM]) =>
 
 /** Turn t1 with an interject after the claim-carrying belief_update; ends the turn. */
 async function interjectedTurn(s: S) {
-  s.orch.onVoiceEvent(start('t1'));
+  begin(s, 't1');
   s.orch.onTrackerEvent(bu('t1', draft('thursday')));
   s.orch.onTrackerEvent({ type: 'interject', turnId: 't1', text: INTERJECT });
   s.orch.onTrackerEvent(bu('t1', draft('thursday')));
@@ -375,7 +385,7 @@ test('after an interject, eager_end/turn_end/final belief are not sent to the sp
   assert.deepEqual(s.specTypes(), ['turn_start:t1', 'belief_update:t1']);
   assert.equal(s.spoken.length, 0, 'nothing spoken at the interjected turn end');
   // The next turn is held too.
-  s.orch.onVoiceEvent(start('t2'));
+  begin(s, 't2', 'Yes');
   assert.deepEqual(s.specTypes(), ['turn_start:t1', 'belief_update:t1']);
 });
 
@@ -455,7 +465,7 @@ test('a turn superseded while its final belief is in flight does not ask "Apply?
   let open!: () => void;
   const gate = new Promise<void>((r) => (open = r));
   const s = setup({ finalBelief: () => belief('draft_message', { person: 'Priya Shah' }), gate });
-  s.orch.onVoiceEvent(start('A'));
+  begin(s, 'A');
   s.orch.onSpeculatorEvent(sc('A', 'LISTENING'));
   s.orch.onTrackerEvent(bu('A', belief('draft_message', { person: 'Priya Shah' })));
   s.orch.onSpeculatorEvent(sc('A', 'SPECULATING'));
@@ -464,6 +474,7 @@ test('a turn superseded while its final belief is in flight does not ask "Apply?
   s.orch.onVoiceTurnEnd('A', 'Text Priya');
   // B starts while A's final belief is pending: forwarded, so the speculator rolls A back silently.
   s.orch.onVoiceEvent(start('B'));
+  s.orch.onVoiceEvent(partial('B', 'Add milk'));
   assert.ok(s.specTypes().includes('turn_start:B'));
   s.orch.onSpeculatorEvent(sc('B', 'LISTENING'));
   open();
@@ -479,13 +490,13 @@ test('a superseded SPECULATING turn speaks nothing, and a stale STAGED for it is
   let open!: () => void;
   const gate = new Promise<void>((r) => (open = r));
   const s = setup({ finalBelief: () => belief('draft_message', { person: 'Priya Shah' }), gate });
-  s.orch.onVoiceEvent(start('A'));
+  begin(s, 'A');
   s.orch.onSpeculatorEvent(sc('A', 'LISTENING'));
   s.orch.onTrackerEvent(bu('A', belief('draft_message', { person: 'Priya Shah' })));
   s.orch.onSpeculatorEvent(sc('A', 'SPECULATING'));
   s.orch.onVoiceEvent(end('A'));
   s.orch.onVoiceTurnEnd('A', 'Text Priya');
-  s.orch.onVoiceEvent(start('B'));
+  begin(s, 'B', 'Add milk');
   open();
   await settle();
   s.orch.onSpeculatorEvent(sc('A', 'STAGED'));
@@ -494,7 +505,7 @@ test('a superseded SPECULATING turn speaks nothing, and a stale STAGED for it is
 
 test('an interjected turn that ends with an empty final flushes unchanged, and a later interject defers again', async () => {
   const s = setup(correctionOpts);
-  s.orch.onVoiceEvent(start('t1'));
+  begin(s, 't1');
   s.orch.onTrackerEvent(bu('t1', draft('thursday')));
   s.orch.onTrackerEvent({ type: 'interject', turnId: 't1', text: INTERJECT });
   s.orch.onVoiceEvent(eager('t1', ''));
@@ -504,9 +515,81 @@ test('an interjected turn that ends with an empty final flushes unchanged, and a
   assert.deepEqual(s.specTypes(), ['turn_start:t1', 'belief_update:t1', 'turn_eager_end:t1', 'turn_end:t1']);
   assert.equal(s.specEvents.filter((e) => e.type === 'belief_update' && e.belief.entities.day === 'friday').length, 0);
   assert.equal(s.spoken.length, 0);
-  s.orch.onVoiceEvent(start('t2'));
+  begin(s, 't2');
   s.orch.onTrackerEvent(bu('t2', draft('thursday')));
   s.orch.onTrackerEvent({ type: 'interject', turnId: 't2', text: INTERJECT });
   s.orch.onVoiceEvent(eager('t2', 'x'));
   assert.equal(s.specTypes().at(-1), 'belief_update:t2', 'eager_end of t2 deferred');
+});
+
+// ---- phantom turns and HUD ----
+
+test('a phantom turn_start (then empty turn_end) during SPECULATING never reaches the speculator; the turn still stages and asks', async () => {
+  const s = setup({ finalBelief: () => belief('draft_message', { person: 'Priya Shah' }) });
+  begin(s, 'A');
+  s.orch.onTrackerEvent(bu('A', belief('draft_message', { person: 'Priya Shah' })));
+  s.orch.onSpeculatorEvent(sc('A', 'SPECULATING'));
+  s.orch.onVoiceEvent(final('A', 'Draft a message to Priya'));
+  s.orch.onVoiceEvent(end('A'));
+  s.orch.onVoiceTurnEnd('A', 'Draft a message to Priya');
+  await settle();
+  s.orch.onVoiceEvent(start('P'));
+  s.orch.onVoiceEvent(final('P', ''));
+  s.orch.onVoiceEvent(end('P'));
+  await settle();
+  assert.ok(!s.specTypes().some((t) => t.endsWith(':P')), s.specTypes().join(','));
+  assert.ok(s.ws.some((e) => e.type === 'turn_start' && e.turnId === 'P'), 'ws still sees the phantom');
+  s.orch.onSpeculatorEvent(sc('A', 'STAGED'));
+  assert.deepEqual(s.texts(), ['I drafted a message to Priya. Apply?']);
+});
+
+test('a phantom that supersedes an open turn: synthetic end reaches the speculator, the old turn stages and asks', async () => {
+  const s = setup();
+  begin(s, 'A');
+  s.orch.onTrackerEvent(bu('A', belief('draft_message', { person: 'Priya Shah' })));
+  s.orch.onSpeculatorEvent(sc('A', 'SPECULATING'));
+  s.orch.onVoiceEvent(start('P'));
+  s.orch.onVoiceEvent(end('P'));
+  s.orch.onVoiceEvent(start('Q')); // synthetic end for a never-forwarded turn is dropped too
+  await settle();
+  assert.deepEqual(s.specTypes(), ['turn_start:A', 'belief_update:A', 'turn_end:A']);
+  s.orch.onSpeculatorEvent(sc('A', 'STAGED'));
+  assert.deepEqual(s.texts(), ['I drafted a message to Priya. Apply?']);
+});
+
+test('a confirm whose only text arrives in transcript_final ("Yes.") still confirms', async () => {
+  const s = setup({ finalBelief: () => belief('draft_message', { person: 'Priya Shah' }), autoState: true });
+  await stagedTurn(s);
+  const before = s.specEvents.length;
+  s.orch.onVoiceEvent(start('t2'));
+  s.orch.onVoiceEvent(final('t2', 'Yes.'));
+  s.orch.onVoiceEvent(end('t2'));
+  s.orch.onVoiceTurnEnd('t2', 'Yes.');
+  await settle();
+  assert.deepEqual(s.calls.filter((c) => c.name === 'spec.onConfirm').map((c) => c.args), [['t1', true]]);
+  assert.equal(s.specEvents.length, before);
+  assert.deepEqual(s.texts(), ['I drafted a message to Priya. Apply?', APPLIED_REPLY]);
+});
+
+test('mock belief: voice belief_update and interject still start the correction deferral', () => {
+  const s = setup({ tracker: false });
+  begin(s, 't1');
+  s.orch.onVoiceEvent(bu('t1', draft('thursday')));
+  s.orch.onVoiceEvent({ type: 'interject', turnId: 't1', text: INTERJECT });
+  s.orch.onVoiceEvent(eager('t1', 'Draft a message to Priya'));
+  assert.deepEqual(s.specTypes(), ['turn_start:t1', 'belief_update:t1']);
+});
+
+test('after a correction yes the HUD receives the corrected belief, and later beliefs of the turn too', async () => {
+  const s = setup(correctionOpts);
+  await interjectedTurn(s);
+  const before = s.ws.length;
+  utter(s, 't2', 'Yes.');
+  await settle();
+  const hud = s.ws.slice(before).filter((e) => e.type === 'belief_update' && e.turnId === 't1');
+  assert.ok(hud.length >= 1);
+  for (const e of hud) assert.ok(e.type === 'belief_update' && e.belief.entities.day === 'friday');
+  s.orch.onTrackerEvent(bu('t1', draft('thursday')));
+  const last = s.ws.at(-1);
+  assert.ok(last?.type === 'belief_update' && last.belief.entities.day === 'friday');
 });

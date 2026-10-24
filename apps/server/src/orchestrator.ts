@@ -64,6 +64,10 @@ export class Orchestrator {
   private closed = false;
 
   private openTurn: string | null = null;
+  /** The open turn's turn_start, kept from the speculator until the turn shows speech (Ink phantoms). */
+  private pendingStart: Extract<ServerEvent, { type: 'turn_start' }> | null = null;
+  /** Turns whose turn_start went to toSpec; spec-bound events of any other turn are dropped. */
+  private readonly started = new Set<string>();
   private readonly lastPartial = new Map<string, string>();
   private readonly lastBelief = new Map<string, Belief>();
   private readonly specState = new Map<string, State>();
@@ -99,17 +103,19 @@ export class Orchestrator {
       case 'turn_start':
         if (this.openTurn !== null && this.openTurn !== ev.turnId) this.syntheticEnd(this.openTurn, ev.ts);
         this.openTurn = ev.turnId;
+        this.pendingStart = ev;
         this.d.send(ev);
-        this.toSpec(ev);
         return;
       case 'transcript_partial':
         this.lastPartial.set(ev.turnId, ev.text);
         this.d.send(ev);
+        this.speech(ev.turnId, ev.text);
         if (tracker) this.guard(tracker.onUpdate(ev.turnId, ev.text), 'tracker update');
         if (this.awaiting && this.heldTurn === ev.turnId && !mayBeConfirm(ev.text)) this.release();
         return;
       case 'turn_eager_end':
         this.d.send(ev);
+        this.speech(ev.turnId, ev.text);
         if (tracker) this.guard(tracker.onEagerEnd(ev.turnId, ev.text), 'tracker eager end');
         this.toSpec(ev);
         return;
@@ -135,6 +141,10 @@ export class Orchestrator {
       case 'moss_hits':
         // Only in mock-belief mode: the mock stream goes through VoiceSession's `send`.
         this.fromBelief(ev);
+        return;
+      case 'transcript_final':
+        this.d.send(ev);
+        this.speech(ev.turnId, ev.text);
         return;
       case 'interject':
         // VoiceSession.handleInterject already spoke it; its `send` is the one ws copy.
@@ -217,6 +227,8 @@ export class Orchestrator {
   private toSpec(ev: ServerEvent): void {
     const turnId = turnOf(ev);
     if (turnId !== null && turnId === this.confirmTurn) return; // a spoken yes/no never speculates
+    if (ev.type === 'turn_start') this.started.add(ev.turnId);
+    else if (turnId !== null && !this.started.has(turnId)) return; // phantom turn: never started
     if (this.deferred && turnId === this.deferred.turnId) {
       this.deferred.events.push(ev);
       return;
@@ -236,8 +248,21 @@ export class Orchestrator {
     this.d.speculator.onServerEvent(ev);
   }
 
+  /** First real speech of a turn forwards its turn_start (before any hold-release check). */
+  private speech(turnId: string, text: string): void {
+    const start = this.pendingStart;
+    if (!start || start.turnId !== turnId || text.trim() === '') return;
+    this.pendingStart = null;
+    this.toSpec(start);
+  }
+
   private fromBelief(ev: Extract<ServerEvent, { type: 'belief_update' | 'moss_hits' }>): void {
-    if (ev.type === 'belief_update') this.lastBelief.set(ev.turnId, ev.belief);
+    const claim = this.corrected.get(ev.turnId);
+    if (ev.type === 'belief_update') {
+      // The HUD shows the corrected belief once the user accepted a correction.
+      if (claim) ev = { ...ev, belief: correctBelief(ev.belief, claim, this.today()) };
+      this.lastBelief.set(ev.turnId, ev.belief);
+    }
     this.d.send(ev);
     this.toSpec(ev);
   }
@@ -246,8 +271,11 @@ export class Orchestrator {
   private syntheticEnd(old: string, ts: number): void {
     const ev: ServerEvent = { type: 'turn_end', turnId: old, ts };
     this.openTurn = null;
+    if (this.pendingStart?.turnId === old) this.pendingStart = null;
     this.d.send(ev);
     this.toSpec(ev);
+    // No longer rolled back by a phantom, it may stage after this: STAGED then speaks.
+    if (this.started.has(old)) this.ended.add(old);
     // The user moved on before the turn ended: keep what was said.
     if (this.deferred?.turnId === old) this.resolveCorrection(false, false);
     const tracker = this.d.tracker;
@@ -356,6 +384,12 @@ export class Orchestrator {
     if (apply) this.corrected.set(d.turnId, d.claim);
     console.log(`[orchestrator] correction ${d.turnId} ${apply ? 'applied' : 'kept'} (${d.events.length} deferred)`);
     for (const ev of d.events) this.toSpec(ev);
+    const last = this.lastBelief.get(d.turnId);
+    if (apply && last) {
+      const belief = correctBelief(last, d.claim, this.today());
+      this.lastBelief.set(d.turnId, belief);
+      this.d.send({ type: 'belief_update', turnId: d.turnId, belief });
+    }
     if (spoken) this.say(correctionAck(apply ? d.claim.known : d.claim.said), d.turnId);
   }
 
