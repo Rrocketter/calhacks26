@@ -1,0 +1,75 @@
+{
+  "turnId": "demo-real-1",
+  "partials": [
+    {
+      "atMs": 1011,
+      "text": "Draft a"
+    },
+    {
+      "atMs": 1624,
+      "text": "Draft a message"
+    },
+    {
+      "atMs": 1643,
+      "text": "Draft a message to"
+    },
+    {
+      "atMs": 2029,
+      "text": "Draft a message to Esha"
+    },
+    {
+      "atMs": 2437,
+      "text": "Draft a message to Esha saying"
+    },
+    {
+      "atMs": 2627,
+      "text": "Draft a message to Esha saying I'"
+    },
+    {
+      "atMs": 2660,
+      "text": "Draft a message to Esha saying I'll"
+    },
+    {
+      "atMs": 3058,
+      "text": "Draft a message to Esha saying I'll present"
+    },
+    {
+      "atMs": 3242,
+      "text": "Draft a message to Esha saying I'll present the"
+    },
+    {
+      "atMs": 3642,
+      "text": "Draft a message to Esha saying I'll present the VQE"
+    },
+    {
+      "atMs": 4080,
+      "text": "Draft a message to Esha saying I'll present the VQE results"
+    },
+    {
+      "atMs": 4248,
+      "text": "Draft a message to Esha saying I'll present the VQE results at"
+    },
+    {
+      "atMs": 4698,
+      "text": "Draft a message to Esha saying I'll present the VQE results at Tuesday"
+    },
+    {
+      "atMs": 4702,
+      "text": "Draft a message to Esha saying I'll present the VQE results at Tuesday's group"
+    },
+    {
+      "atMs": 4725,
+      "text": "Draft a message to Esha saying I'll present the VQE results at Tuesday's group meeting."
+    },
+    {
+      "atMs": 4726,
+      "text": "Draft a message to Esha saying I'll present the VQE results at Tuesday's group meeting.",
+      "eager": true
+    },
+    {
+      "atMs": 5665,
+      "text": "Draft a message to Esha saying I'll present the VQE results at Tuesday's group meeting.",
+      "final": true
+    }
+  ]
+}

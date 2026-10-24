@@ -1,12 +1,11 @@
 // Replays an Ink fixture through the live BeliefTracker (real Moss + Haiku) and prints a timeline.
 // This is the DEMO_MODE backbone: the only place the Ink fixture drives the live tracker.
 import { readFileSync } from 'node:fs';
-import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { MossClient } from '@moss-js/moss';
 import { RETRIEVAL_MODES, type Belief, type RetrievalMode, type ServerEvent } from '@ahead/contracts';
 import { loadFixture, mockInkStream } from '@ahead/contracts/mocks/node';
-import { REPO_ROOT, requireEnv } from '../src/env.js';
+import { CONTACTS_FILE, requireEnv } from '../src/env.js';
 import { HaikuIntentLlm } from '../src/belief/haiku.js';
 import { normalize } from '../src/belief/normalize.js';
 import { BeliefTracker } from '../src/belief/tracker.js';
@@ -32,11 +31,25 @@ function pct(sorted: number[], p: number): number {
 const fmt = (ms: number) => `+${Math.round(ms)}ms`.padEnd(8);
 
 /** What demo-utterance-1 must lock and say for a PASS. */
-export const EXPECTED = {
-  intent: 'draft_message',
-  person: 'Priya Shah',
-  interject: 'Say Friday?',
-} as const;
+/** What a fixture's replay must lock and interject. `said` is the contradicted word. */
+export type Expectation = { intent: Belief['intent']; person: string; said: string; interject: string };
+export const EXPECTATIONS: Record<string, Expectation> = {
+  // Synthetic corpus (unit tests, replay --local-corpus).
+  'demo-utterance-1': {
+    intent: 'draft_message',
+    person: 'Priya Shah',
+    said: 'Thursday',
+    interject: 'Heads up, the Q3 deck review is Friday at 2, not Thursday. Say Friday?',
+  },
+  // Imported Google corpus (IMPORT_GOOGLE=1).
+  'demo-real-1': {
+    intent: 'draft_message',
+    person: 'Esha Telang',
+    said: 'Tuesday',
+    interject: 'Heads up, the VQE meeting is Monday at 8:30, not Tuesday. Say Monday?',
+  },
+};
+export const EXPECTED = EXPECTATIONS['demo-utterance-1']!;
 
 /**
  * Observes the tracker: pass `tap.emit` as the tracker's `emit` (forward to your own sink via
@@ -48,6 +61,8 @@ export class ReplayTap {
   /** Delivered partials in order (raw text, normalized text, wall offset). */
   partials: { text: string; norm: string; atMs: number }[] = [];
   processingIdx = -1;
+  /** Wall offsets of eager ends; the tracker never interjects after the user finished. */
+  eagerAts: number[] = [];
   t0 = 0;
   turnId = '';
   tracker?: BeliefTracker;
@@ -156,6 +171,7 @@ export async function runReplay(opts: {
       void tracker.onUpdate(ev.turnId, ev.text);
     } else if (ev.type === 'turn_eager_end') {
       print(`${fmt(tap.now())} eager_end`);
+      tap.eagerAts.push(tap.now());
       void tracker.onEagerEnd(ev.turnId, ev.text);
     } else if (ev.type === 'turn_resume') {
       print(`${fmt(tap.now())} resume`);
@@ -181,7 +197,8 @@ export async function runReplay(opts: {
 }
 
 /** Prints the verdict block; returns true on PASS. */
-export function printVerdict(tap: ReplayTap, said: string, print: Line): boolean {
+export function printVerdict(tap: ReplayTap, exp: Expectation, print: Line): boolean {
+  const said = exp.said;
   const saidIdx = tap.partials.findIndex((p) => p.norm.split(' ').includes(normalize(said)));
   const show = (x?: { atMs: number; idx: number }) =>
     x ? `${fmt(x.atMs).trim()} on #${x.idx} "${tap.partials[x.idx]?.text ?? '?'}"` : 'none';
@@ -208,16 +225,18 @@ export function printVerdict(tap: ReplayTap, said: string, print: Line): boolean
   print(`said:      ${tap.interject ? JSON.stringify(tap.interject.text) : 'none'}`);
   const saidAt = saidIdx >= 0 ? tap.partials[saidIdx]!.atMs : NaN;
   if (tap.interject && saidIdx >= 0) print(`interject lag: ${Math.round(tap.interject.atMs - saidAt)}ms after the ${said.toLowerCase()} partial`);
-  const nextAt = saidIdx >= 0 ? (tap.partials[saidIdx + 1]?.atMs ?? Infinity) : NaN;
+  // Real Ink can deliver the next words a few ms after the contradicted one, so the bar is the
+  // user finishing (first eager end after the word), not the next partial.
+  const eager = tap.eagerAts.find((t) => t >= saidAt) ?? Infinity;
   const checks: [string, boolean][] = [
     [`${said.toLowerCase()} partial found`, saidIdx >= 0],
     ['lock attributed to an earlier partial', !!tap.lock && tap.lock.idx >= 0 && tap.lock.idx < saidIdx],
     [`lock before the ${said.toLowerCase()} partial arrived`, !!tap.lock && tap.lock.atMs < saidAt],
-    [`locked ${EXPECTED.intent}`, lockB?.intent === EXPECTED.intent],
-    [`locked person ${EXPECTED.person}`, lockB?.entities.person === EXPECTED.person],
+    [`locked ${exp.intent}`, lockB?.intent === exp.intent],
+    [`locked person ${exp.person}`, lockB?.entities.person === exp.person],
     [`interject on the ${said.toLowerCase()} partial`, !!tap.interject && tap.interject.idx === saidIdx],
-    ['interject before the next partial arrived', !!tap.interject && tap.interject.atMs < nextAt],
-    ['interject text matches', tap.interject?.text === EXPECTED.interject],
+    ['interject before the user finished (eager end)', !!tap.interject && tap.interject.atMs < eager],
+    ['interject text matches', tap.interject?.text === exp.interject],
   ];
   for (const [name, ok] of checks) print(`  ${ok ? 'ok  ' : 'FAIL'} ${name}`);
   const pass = checks.every(([, ok]) => ok);
@@ -236,8 +255,7 @@ async function main(): Promise<void> {
   if (!(RETRIEVAL_MODES as readonly string[]).includes(retrievalArg)) throw new Error(`bad --retrieval: ${retrievalArg}`);
   const localCorpus = args.includes('--local-corpus');
 
-  const contactsFile = path.join(REPO_ROOT, 'workspace-seed', 'contacts.json');
-  const { contacts } = JSON.parse(readFileSync(contactsFile, 'utf8')) as { contacts: { name: string }[] };
+  const { contacts } = JSON.parse(readFileSync(CONTACTS_FILE, 'utf8')) as { contacts: { name: string }[] };
 
   // Warm-up outside timing, as at server startup.
   const moss = localCorpus ? await loadLocalCorpus() : await MossIndex.load();
@@ -259,7 +277,12 @@ async function main(): Promise<void> {
     const print = (line: string) => console.log(line);
     print(`[replay] fixture=${fixture} speed=${speed} retrieval=${retriever.mode}${localCorpus ? ' corpus=local synthetic' : ''}`);
     await runReplay({ fixture, speed, tracker, tap, print });
-    const pass = printVerdict(tap, 'Thursday', print);
+    const exp = EXPECTATIONS[fixture];
+    if (!exp) {
+      print(`no expectation for ${fixture}: timeline only`);
+      return;
+    }
+    const pass = printVerdict(tap, exp, print);
     if (!pass) process.exitCode = 1;
   } finally {
     await moss.close();

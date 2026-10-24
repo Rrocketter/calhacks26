@@ -1,8 +1,10 @@
 // Headless DEMO_MODE driver: asks the running server (DEMO_MODE=1) to play a fixture through the
 // live belief tracker and Droid executor, answers the correction and Apply prompts, then checks the
-// workspace. Usage: demo-run.ts [fixture] [--confirm=client|spoken|reject] [--port=N] [--no-correct]
+// workspace against CHECKS. Lookup fixtures wait for the spoken answer and check the final belief.
+// Usage: demo-run.ts [fixture] [--confirm=client|spoken|reject] [--port=N] [--no-correct]
+// demo-real-* need the server and this driver on the Google import (IMPORT_GOOGLE=1).
 import { execFileSync } from 'node:child_process';
-import { parseServerEvent, type ClientEvent, type ServerEvent } from '@ahead/contracts';
+import { parseServerEvent, type Belief, type ClientEvent, type ServerEvent } from '@ahead/contracts';
 import WebSocket from 'ws';
 import { WORKSPACE_DIR } from '../src/env.js';
 import { CORRECTION_TIMEOUT_MS } from '../src/orchestrator.js';
@@ -10,9 +12,34 @@ import { CORRECTION_TIMEOUT_MS } from '../src/orchestrator.js';
 const DONE_TIMEOUT_MS = 90000;
 const TTS_WAIT_MS = 15000;
 
+/**
+ * Per fixture. action: the committed file must / must not match after a commit, `staged` must match
+ * the file's staged diff, and an interject is required when `interject`. lookup: the final belief is
+ * a lookup whose Moss hits (docId + snippet) match `hit`.
+ */
+type Check =
+  | { kind: 'action'; file: string; interject?: boolean; must?: RegExp[]; mustNot?: RegExp[]; staged?: RegExp[] }
+  | { kind: 'lookup'; hit: RegExp };
+const CHECKS: Record<string, Check> = {
+  // Synthetic seed (unit-test fixtures).
+  'demo-utterance-1': { kind: 'action', file: 'messages/outbox/priya.md', interject: true, must: [/Friday/], mustNot: [/Thursday/] },
+  'demo-utterance-2': { kind: 'action', file: 'calendar.json' },
+  // Google import (IMPORT_GOOGLE=1). Dates are for the week of 2026-10-24.
+  'demo-real-1': { kind: 'action', file: 'messages/outbox/esha.md', interject: true, must: [/Monday/], mustNot: [/Tuesday/] },
+  'demo-real-2': {
+    kind: 'action',
+    file: 'calendar.json',
+    staged: [/^-.*"start": "2026-10-27T13:00:00-07:00"/m, /^\+.*"start": "2026-10-28T14:00:00-07:00"/m],
+  },
+  'demo-real-3': { kind: 'lookup', hit: /MATH 52 HW due/i },
+  'demo-real-4': { kind: 'lookup', hit: /^memory-\S+-artifact .*\besha\b/i },
+};
+
 const args = process.argv.slice(2);
 const flag = (name: string) => args.find((a) => a.startsWith(`--${name}=`))?.split('=')[1];
-const fixture = args.find((a) => !a.startsWith('--')) ?? 'demo-utterance-1';
+const fixture = args.find((a) => !a.startsWith('--')) ?? 'demo-real-1';
+const check = CHECKS[fixture];
+const LOOKUP = check?.kind === 'lookup';
 const confirm = flag('confirm') ?? 'spoken';
 const PORT = Number(flag('port') ?? process.env.AHEAD_SERVER_PORT ?? 8787);
 const NO_CORRECT = args.includes('--no-correct');
@@ -44,6 +71,10 @@ let stagedLineDone = false;
 let correctionExpired = false; // server's correction window closed before we could answer
 const CORRECTION_WINDOW_MS = CORRECTION_TIMEOUT_MS;
 let turnEndAt = 0;
+let lastBelief: Belief | null = null;
+let speculated = false; // the fixture turn reached SPECULATING (a lookup's find_file guess)
+let rolledBack = false;
+const stagedDiffs = new Map<string, string>();
 const changed: string[] = [];
 let correctionAfter: number | null = null; // earliest time the correction may be answered
 
@@ -107,6 +138,9 @@ function onEvent(e: ServerEvent): void {
     case 'turn_eager_end':
       detail = ` "${e.text}"`;
       break;
+    case 'belief_update':
+      if (e.turnId === fixtureTurn) lastBelief = e.belief;
+      break;
     case 'turn_end':
       if (e.turnId === fixtureTurn) {
         turnEnded = true;
@@ -119,7 +153,10 @@ function onEvent(e: ServerEvent): void {
       break;
     case 'state_change':
       detail = ` ${e.state} turn=${e.turnId}`;
-      if (e.turnId === fixtureTurn) {
+      if (e.turnId === fixtureTurn && LOOKUP) {
+        if (e.state === 'SPECULATING') speculated = true;
+        if (e.state === 'ROLLED_BACK') rolledBack = true;
+      } else if (e.turnId === fixtureTurn) {
         if (e.state === 'SPECULATING') mark('lock', now);
         if (e.state === 'STAGED' && !stagedSeen) {
           stagedSeen = true;
@@ -142,12 +179,20 @@ function onEvent(e: ServerEvent): void {
       break;
     case 'droid_event':
       mark('droid', now);
+      if (e.kind === 'diff' && e.turnId === fixtureTurn) {
+        const p = e.payload as { file?: string; diff?: string };
+        if (p.file && p.diff) stagedDiffs.set(p.file, p.diff);
+      }
       detail = ` ${e.kind}${e.denied ? ' denied' : ''}`;
       break;
     case 'tts_audio_chunk': {
       const ctx = e.contextId.slice(0, 8);
       if (e.done) {
         openCtx.delete(e.contextId);
+        if (LOOKUP && turnEnded && e.turnId === fixtureTurn) {
+          mark('answer', now);
+          setTimeout(() => finish?.(), 1500); // let the final belief land
+        }
         if (e.contextId === stagedCtx) stagedLineDone = true;
         detail = ` done ctx=${ctx} turn=${e.turnId}`;
       } else {
@@ -198,6 +243,7 @@ const gap = (a: string, b: string) =>
 
 ws.on('open', async () => {
   console.log(`--- demo-run fixture=${fixture} confirm=${confirm}${NO_CORRECT ? ' no-correct' : ''} workspace=${WORKSPACE_DIR} ---`);
+  const startMain = git('rev-parse', 'main').trim();
   send({ type: 'demo_control', action: 'start', fixture });
   const timer = setTimeout(() => {
     console.log(`timeout ${DONE_TIMEOUT_MS}ms waiting for COMMITTED/ROLLED_BACK`);
@@ -218,12 +264,13 @@ ws.on('open', async () => {
   ws.close();
 
   const problems: string[] = [];
-  let priya = '';
+  const action = check?.kind === 'action' ? check : null;
+  let content = '';
   try {
-    const subject = git('log', '-1', '--format=%s', 'main').trim();
+    const mainSubject = git('log', '-1', '--format=%s', 'main').trim();
     changed.push(...git('diff-tree', '--no-commit-id', '--name-only', '-r', 'main').split('\n').filter(Boolean));
-    console.log(`--- workspace main: ${subject} ---\n${git('show', 'main', '--stat')}`);
-    if (finalState === 'COMMITTED' && fixture.includes('utterance-1')) priya = git('show', 'main:messages/outbox/priya.md');
+    console.log(`--- workspace main: ${mainSubject} ---\n${git('show', 'main', '--stat')}`);
+    if (finalState === 'COMMITTED' && action) content = git('show', `main:${action.file}`);
   } catch (err) {
     problems.push(`workspace git failed: ${(err as Error).message.split('\n')[0]}`);
   }
@@ -235,25 +282,46 @@ ws.on('open', async () => {
   console.log(`turn_start -> STAGED: ${gap('turn_start', 'staged')}`);
   console.log(`STAGED -> final: ${gap('staged', 'final')}`);
   console.log(`${finalState === 'ROLLED_BACK' ? 'rollback' : 'commit'} done ${marks.merge === undefined ? 'n/a' : `+${marks.merge}ms (STAGED -> merge-done ${gap('staged', 'merge')})`}`);
+  console.log(`turn_end -> spoken answer: ${gap('turn_end', 'answer')}`);
   console.log(`events: ${[...counts].map(([k, v]) => `${k}=${v}`).join(' ')}`);
 
-  const utt1 = fixture.includes('utterance-1');
-  const utt2 = fixture.includes('utterance-2');
-  const want = confirm === 'reject' ? 'ROLLED_BACK' : 'COMMITTED';
-  if (marks.lock === undefined) problems.push('no state_change SPECULATING');
-  if (marks.droid === undefined) problems.push('no droid_event');
-  if (!stagedSeen) problems.push('no STAGED');
-  if (mergeError !== null) problems.push(`droid error after final state: ${mergeError}`);
-  else if (marks.merge === undefined) problems.push('no droid commit/rollback metric');
-  if (finalState !== want) problems.push(`final state ${finalState ?? 'none'}, wanted ${want}`);
-  if (utt1 && !interjected) problems.push('no interject for utterance 1');
-  if (finalState === 'COMMITTED' && want === 'COMMITTED') {
-    const file = utt1 ? 'messages/outbox/priya.md' : utt2 ? 'calendar.json' : null;
-    if (file && !changed.includes(file)) problems.push(`main diff does not touch ${file}`);
-    if (utt1 && interjected && !NO_CORRECT) {
-      if (correctionExpired) problems.push('correction window expired before the driver answered');
-      if (!priya.includes('Friday')) problems.push('priya.md lacks Friday');
-      if (priya.includes('Thursday')) problems.push('priya.md still has Thursday');
+  if (!check) problems.push(`no CHECKS entry for ${fixture}`);
+  if (check?.kind === 'lookup') {
+    const b = lastBelief as Belief | null;
+    const hits = (b?.topHits ?? []).map((h) => `${h.docId} ${h.snippet}`);
+    console.log(`final belief: ${b?.intent ?? 'none'} conf=${b?.confidence ?? '-'}; speculated=${speculated} rolled_back=${rolledBack}`);
+    for (const h of hits) console.log(`  hit ${h.slice(0, 140)}`);
+    if (b?.intent !== 'lookup') problems.push(`final intent ${b?.intent ?? 'none'}, wanted lookup`);
+    if (!hits.some((h) => check.hit.test(h))) problems.push(`no hit matching ${check.hit}`);
+    if (marks.answer === undefined) problems.push('no spoken answer');
+    if (speculated && !rolledBack) problems.push('a speculation started and was not rolled back');
+  }
+  if (action) {
+    const want = confirm === 'reject' ? 'ROLLED_BACK' : 'COMMITTED';
+    if (marks.lock === undefined) problems.push('no state_change SPECULATING');
+    if (marks.droid === undefined) problems.push('no droid_event');
+    if (!stagedSeen) problems.push('no STAGED');
+    if (mergeError !== null) problems.push(`droid error after final state: ${mergeError}`);
+    else if (marks.merge === undefined) problems.push('no droid commit/rollback metric');
+    if (finalState !== want) problems.push(`final state ${finalState ?? 'none'}, wanted ${want}`);
+    if (action.interject && !interjected) problems.push(`no interject for ${fixture}`);
+    const staged = stagedDiffs.get(action.file) ?? '';
+    const changedLines = staged.split('\n').filter((l) => /^[-+](?![-+])/.test(l));
+    console.log(`staged ${action.file}: ${changedLines.length} changed lines`);
+    for (const l of changedLines.slice(0, 8)) console.log(`  ${l.slice(0, 160)}`);
+    for (const re of action.staged ?? []) if (!re.test(staged)) problems.push(`staged ${action.file} diff lacks ${re}`);
+    if (finalState === 'ROLLED_BACK' && want === 'ROLLED_BACK') {
+      const dirty = git('status', '--porcelain').trim();
+      const moved = git('rev-parse', 'main').trim() !== startMain;
+      if (moved || dirty) problems.push(`main not clean after discard (${moved ? 'main moved' : 'main unchanged'}, ${dirty ? 'dirty' : 'clean'})`);
+    }
+    if (finalState === 'COMMITTED' && want === 'COMMITTED') {
+      if (!changed.includes(action.file)) problems.push(`main diff does not touch ${action.file}`);
+      if (action.interject && interjected && !NO_CORRECT) {
+        if (correctionExpired) problems.push('correction window expired before the driver answered');
+        for (const re of action.must ?? []) if (!re.test(content)) problems.push(`${action.file} lacks ${re}`);
+        for (const re of action.mustNot ?? []) if (re.test(content)) problems.push(`${action.file} still matches ${re}`);
+      }
     }
   }
   if (problems.length) {

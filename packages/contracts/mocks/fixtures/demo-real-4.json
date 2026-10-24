@@ -1,0 +1,31 @@
+{
+  "turnId": "demo-real-4",
+  "partials": [
+    {
+      "atMs": 897,
+      "text": "What"
+    },
+    {
+      "atMs": 1071,
+      "text": "What did"
+    },
+    {
+      "atMs": 1089,
+      "text": "What did I tell E"
+    },
+    {
+      "atMs": 1095,
+      "text": "What did I tell Esha?"
+    },
+    {
+      "atMs": 1095,
+      "text": "What did I tell Esha?",
+      "eager": true
+    },
+    {
+      "atMs": 2079,
+      "text": "What did I tell Esha?",
+      "final": true
+    }
+  ]
+}

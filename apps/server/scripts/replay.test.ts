@@ -2,9 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Belief } from '@ahead/contracts';
 import { normalize } from '../src/belief/normalize.js';
-import { printVerdict, ReplayTap } from './replay.js';
+import { EXPECTED, printVerdict, ReplayTap } from './replay.js';
 
-const DEMO_TEXT = 'Say Friday?';
+const DEMO_TEXT = EXPECTED.interject;
 
 function belief(intent: Belief['intent'], person?: string): Belief {
   return {
@@ -29,7 +29,7 @@ function goodTap(): ReplayTap {
 
 function verdict(tap: ReplayTap): { pass: boolean; out: string } {
   const lines: string[] = [];
-  const pass = printVerdict(tap, 'Thursday', (l) => lines.push(l));
+  const pass = printVerdict(tap, EXPECTED, (l) => lines.push(l));
   return { pass, out: lines.join('\n') };
 }
 
@@ -48,9 +48,12 @@ test('lock attributed before the said partial but landing after it fails', () =>
   assert.equal(verdict(tap).pass, false);
 });
 
-test('interject landing after the next partial arrived fails', () => {
+test('interject after the user finished (eager end) fails; after the next partial is fine', () => {
   const tap = goodTap();
+  tap.eagerAts = [100, 800]; // 100 is before "Thursday" (#2 at 500) and does not count
   tap.interject = { ...tap.interject!, atMs: 760 }; // next partial at 750
+  assert.equal(verdict(tap).pass, true);
+  tap.interject = { ...tap.interject!, atMs: 810 };
   assert.equal(verdict(tap).pass, false);
 });
 

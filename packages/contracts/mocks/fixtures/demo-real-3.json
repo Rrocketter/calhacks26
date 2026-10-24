@@ -1,0 +1,73 @@
+{
+  "turnId": "demo-real-3",
+  "partials": [
+    {
+      "atMs": 1013,
+      "text": "Find"
+    },
+    {
+      "atMs": 1423,
+      "text": "Find the"
+    },
+    {
+      "atMs": 2030,
+      "text": "Find the,"
+    },
+    {
+      "atMs": 2045,
+      "text": "Find the, actually never mind"
+    },
+    {
+      "atMs": 2057,
+      "text": "Find the, actually never mind."
+    },
+    {
+      "atMs": 2058,
+      "text": "Find the, actually never mind.",
+      "eager": true
+    },
+    {
+      "atMs": 2409,
+      "text": "",
+      "resume": true
+    },
+    {
+      "atMs": 3299,
+      "text": "Find the, actually never mind. When"
+    },
+    {
+      "atMs": 3434,
+      "text": "Find the, actually never mind. When is"
+    },
+    {
+      "atMs": 3641,
+      "text": "Find the, actually never mind. When is my"
+    },
+    {
+      "atMs": 4056,
+      "text": "Find the, actually never mind. When is my math"
+    },
+    {
+      "atMs": 4459,
+      "text": "Find the, actually never mind. When is my math"
+    },
+    {
+      "atMs": 4482,
+      "text": "Find the, actually never mind. When is my math 52 homework"
+    },
+    {
+      "atMs": 4497,
+      "text": "Find the, actually never mind. When is my math 52 homework due?"
+    },
+    {
+      "atMs": 4497,
+      "text": "Find the, actually never mind. When is my math 52 homework due?",
+      "eager": true
+    },
+    {
+      "atMs": 4872,
+      "text": "Find the, actually never mind. When is my math 52 homework due?",
+      "final": true
+    }
+  ]
+}

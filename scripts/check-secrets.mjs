@@ -9,6 +9,9 @@ const patterns = [
   { name: 'factory', re: /fk-[A-Za-z0-9_-]{20,}/ },
 ];
 
+// Non-secret config whose value is meant to appear in docs and tests (a calendar name).
+const NOT_SECRET = new Set(['CALENDAR_EXCLUDE']);
+
 const envValues = [];
 if (existsSync('.env')) {
   for (const raw of readFileSync('.env', 'utf8').split(/\r?\n/)) {
@@ -16,6 +19,7 @@ if (existsSync('.env')) {
     if (!line || line.startsWith('#')) continue;
     const eq = line.indexOf('=');
     if (eq < 0) continue;
+    if (NOT_SECRET.has(line.slice(0, eq).trim())) continue;
     let v = line.slice(eq + 1).trim();
     if (/^(['"]).*\1$/.test(v)) v = v.slice(1, -1);
     if (v.length >= 8) envValues.push(v);

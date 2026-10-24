@@ -20,6 +20,7 @@
     "smoke:voice": "node --import tsx scripts/smoke-voice.ts",
     "demo:run": "node --import tsx scripts/demo-run.ts",
     "memory:check": "node --import tsx scripts/memory-check.ts",
+    "record:fixture": "node --env-file=../../.env --import tsx scripts/record-fixture.ts",
     "spike:memory": "MOSS_DISABLE_TELEMETRY=1 node --env-file=../../.env --import tsx scripts/spike-memory.ts",
     "smoke:executor": "node --env-file=../../.env --import tsx scripts/smoke-executor.ts"
   },

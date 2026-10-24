@@ -103,21 +103,34 @@ type Belief = {
 
 ## 5. Demo script (Cartesia wants demo-first, one complete flow)
 
-Corpus facts to seed: meeting with Priya is Friday 2 PM. Project file "q3-deck.pdf" in files/. Contact Priya.
+Runs on the presenter's real calendar and email: `IMPORT_GOOGLE=1` with `CALENDAR_EXCLUDE=Recruiting` (docs/google-setup.md), `ahead-corpus` built from the import, workspace from `pnpm reset:workspace` with the Google overlay. Facts it relies on (week of 2026-10-24): VQE Project Group Meeting is Mondays 8:30 PM with Esha Telang attending; SETI Research Meeting is Tuesdays 1 PM; Math 52 homework is due Mondays 11:59 PM on Gradescope. Clear `ahead-memory` before the run so beat 4 recalls only this run.
 
 **Utterance 1 (the interjection, lead with this):**
-"Draft a message to Priya saying I'll see her Thursday at two for the..."
-→ at "Thursday" the agent cuts in: "Quick note, your meeting with Priya is Friday at two, not Thursday. Want me to say Friday?" User: "yes." Draft is already staged (Droid started at "Draft a message to Priya"). Commit. ~12 seconds.
+"Draft a message to Esha saying I'll present the VQE results at Tuesday's group meeting."
+→ at "Tuesday" the agent cuts in: "Heads up, the VQE meeting is Monday at 8:30, not Tuesday. Say Monday?" User: "yes." Then "Apply?", "yes". `messages/outbox/esha.md` is committed and reads Monday ("I'll present the VQE results at Monday's group meeting."), never Tuesday.
 
-**Utterance 2 (zero-latency answer):**
-"Move my Friday meeting with Priya to Monday morning."
-→ HUD shows belief lock at "Friday meeting with Priya", Droid stages the calendar edit before "Monday" is spoken, Sonic responds the instant the turn ends with the diff summary. Apply.
+**Utterance 2 (zero-latency answer, then discard):**
+"Move my SETI research meeting to Wednesday afternoon."
+→ belief locks reschedule_event at "SETI", Droid stages SETI Research Meeting Tue 10-27 13:00 → Wed 10-28 14:00 (only that occurrence), "Apply?", user: "no". Main is unchanged.
 
 **Utterance 3 (rollback, shows honesty):**
-"Find the... actually never mind, what time is my Priya meeting now?"
-→ Speculation on find_file starts, intent diverges, UI shows ROLLED_BACK, answers the lookup. Judges see the system is honest about mispredictions.
+"Find the... actually never mind, when is my Math 52 homework due?"
+→ a find_file guess may start speculating and is rolled back when the intent turns to lookup; the answer is "Monday, October 26 at 11:59 PM".
 
-**Hardcoded fallback:** a `DEMO_MODE=1` flag that replays recorded Ink partials from a fixture file so the full loop runs even if the mic or network dies. Build this Saturday night, not Sunday morning.
+**Utterance 4 (conversation memory):**
+"What did I tell Esha?"
+→ Moss memory returns the committed draft; the answer names Monday and the VQE results.
+
+**Hardcoded fallback:** `DEMO_MODE=1` replays recorded Ink partials so the full loop runs even if the mic or network dies. Fixtures `demo-real-1`..`demo-real-4` were recorded through real Ink 2 from macOS `say` audio (`pnpm --filter @ahead/server record:fixture <name> "<sentence>"`; utterance 4 uses `--voice=Karen --rate=160`, the voice Ink transcribes as "Esha"). Headless check, server started with `IMPORT_GOOGLE=1 DEMO_MODE=1`:
+
+```
+pnpm --filter @ahead/server demo:run demo-real-1 --confirm=spoken
+pnpm --filter @ahead/server demo:run demo-real-2 --confirm=reject
+pnpm --filter @ahead/server demo:run demo-real-3
+pnpm --filter @ahead/server demo:run demo-real-4
+```
+
+Each prints PASS when its expected lines above hold. The Priya fixtures (`demo-utterance-*`) stay for unit tests on the synthetic seed.
 
 ## 6. Definition of done (ordered, stop at a working state at each tier)
 

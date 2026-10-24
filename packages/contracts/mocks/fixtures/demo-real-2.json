@@ -1,0 +1,43 @@
+{
+  "turnId": "demo-real-2",
+  "partials": [
+    {
+      "atMs": 656,
+      "text": "Move"
+    },
+    {
+      "atMs": 845,
+      "text": "Move my"
+    },
+    {
+      "atMs": 1444,
+      "text": "Move my SETI"
+    },
+    {
+      "atMs": 1665,
+      "text": "Move my SETI research"
+    },
+    {
+      "atMs": 2277,
+      "text": "Move my SETI research meeting to"
+    },
+    {
+      "atMs": 2307,
+      "text": "Move my SETI research meeting to Wednesday"
+    },
+    {
+      "atMs": 2330,
+      "text": "Move my SETI research meeting to Wednesday afternoon."
+    },
+    {
+      "atMs": 2330,
+      "text": "Move my SETI research meeting to Wednesday afternoon.",
+      "eager": true
+    },
+    {
+      "atMs": 3499,
+      "text": "Move my SETI research meeting to Wednesday afternoon.",
+      "final": true
+    }
+  ]
+}

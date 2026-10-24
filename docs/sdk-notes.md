@@ -569,3 +569,34 @@ All times are from the fixture's `turn_start`. `merge done` runs from STAGED to 
   - With the fix: **5/5 pass** (Friday, no Thursday). The post-check never had to rerun, so the prompt alone was enough. 18 to 29 s per trial.
   - Control (`--control`, the old correction): 0/5. Every draft said Thursday and none said Friday.
 - The DEMO_MODE fixture path could not be used for this: with the new corpus, utterance 1 never interjects (see the corpus note above).
+
+### Demo on real data: demo-real-1..4 (2026-10-24)
+
+- **Fixtures** were recorded with `record:fixture`: macOS `say` WAV (16 kHz mono) streamed in real time through real Ink 2. Every `turn.update` / `eager_end` / `resume` / `end` is written with its time from Ink's `turn.start`. The WAVs are in `apps/server/scripts/fixtures/`.
+  - Ink delivers the end of a sentence in a burst. In demo-real-1, "Tuesday" arrives at +4.70 s and "Tuesday's group meeting." 4 to 27 ms later, with the eager end on the same tick. The interject therefore has about 20 to 30 ms to land before the user is "finished". Moss makes it in 13 to 21 ms.
+  - Ink's spelling of the name "Esha" depends on the voice: Samantha gave "Asha"; Rishi gave "Isha" (and once "Esha"); Daniel gave "Isha"; Karen at rate 160 gave "Esha". demo-real-4 uses Karen.
+  - In demo-real-3, Ink split "Find the, actually never mind." with an eager end at +2.06 s and a `turn.resume` at +2.41 s, then continued the same turn.
+- **Imported corpus:** each occurrence of a repeating event is its own doc (12 VQE meetings, 12 SETI meetings, 11 Math 52 HW deadlines), and past occurrences often outrank the next one. Two consequences:
+  - Contradictions still work, since every occurrence has the same weekday.
+  - Lookups need the next occurrence. Moss's metadata filter does that: `{ $and: [{ field: 'type', condition: { $eq: 'calendar' } }, { field: 'date', condition: { $gte: '2026-10-24' } }] }` compares the ISO `date` strings correctly in about 3 ms. The lookup answer adds the top 3 upcoming hits first, and the answerer is told today's date.
+- **Contradiction by topic:** a strong calendar hit whose title shares a non-generic word with the utterance ("VQE") wins over a match by attendee. That match also counts as Moss support for the lock (like a resolved person) and fills `event` with the calendar title, so a Phase 2 that fires at eager end knows the event. Without it, "Move my SETI research meeting…" had no person, Phase 2 ran with no event named, and Droid made no edit.
+- **DEMO_MODE sequence** (server `IMPORT_GOOGLE=1 DEMO_MODE=1`, `ahead-memory` deleted first, one workspace for all four):
+
+  | Fixture | Result | Timings |
+  | --- | --- | --- |
+  | demo-real-1, spoken yes / yes | PASS 2/2: interject "Heads up, the VQE meeting is Monday at 8:30, not Tuesday. Say Monday?"; `esha.md` committed: "I'll present the VQE results at Monday's group meeting." | lock 2.04 s, interject 4.73 to 4.74 s, STAGED 22.8 to 24.2 s, commit done 26.1 to 26.6 s |
+  | demo-real-2, spoken no | PASS 2/2: staged SETI 2026-10-27T13:00 → 2026-10-28T14:00 (end 15:00), main unchanged after discard | lock 1.5 to 2.0 s, STAGED 25.9 to 26.0 s (38 s in earlier runs), rollback done 29.3 to 29.8 s |
+  | demo-real-3 | PASS 2/2: lookup, "Your next Math 52 homework is due Monday, October 26 at 11:59 PM on Gradescope." | answer audio 2.8 to 3.3 s after turn end; find_file speculated and rolled back in 1 of 4 runs |
+  | demo-real-4 | PASS 2/2: lookup with the committed draft's memory doc in its hits, "You told Esha, \"I'll present the VQE results at Monday's group meeting.\"" | answer audio 2.8 to 4.4 s after turn end |
+
+- **Slow staging on the real calendar:** `calendar.json` is now 217 events (70 KB). Droid Phase 1 takes 16 to 26 s, mostly reading it (twice in some runs), so STAGED lands 23 to 39 s into the turn, long after the user finished.
+- **demo-real-3's rollback is not deterministic.** Haiku rates "Find the" as find_file at only 0.30, so the belief never locks before "never mind". The speculation that did start (1 of 4 runs) locked find_file at "When is my math" (0.76: an earlier Haiku find_file guess plus topic support from "Math 52") and rolled back 0.65 s later.
+
+**Retrieval A/B on demo-real-1** (`IMPORT_GOOGLE=1 replay demo-real-1 --retrieval=<mode>`, real `ahead-corpus`, 3 runs each):
+
+| Retrieval | Interject lag after "Tuesday" | Interject from turn start | Moss step p50 / p95 |
+| --- | --- | --- | --- |
+| Moss | 13 to 20 ms | 4.74 s, before the eager end at 4.75 s | 9 to 10 ms / 13 to 19 ms |
+| Cloud-sim (+300 ms per query) | 5.2 to 6.4 s | 9.9 to 11.1 s, about 5 s after the user finished | 915 to 918 ms / 1.22 to 1.23 s |
+
+Under cloud-sim the tracker still interjects late: the "Tuesday" partial's step is queued behind the slow ones and is processed before the eager end in chain order. So the user would hear the correction about 5 s after they stopped talking.
