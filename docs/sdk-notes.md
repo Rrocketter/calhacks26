@@ -70,6 +70,20 @@ Top hits:
 
 **Final verification run (Task 10):** createIndex 6618.6 ms, loadIndex 4401.4 ms (index already built earlier, model cached), warmup query 5.0 ms, query p50 2.0 ms, p95 2.2 ms, SDK `timeTakenInMs` 0 / 0. Same top hits as before.
 
+### ahead-corpus (Lane B)
+
+382 docs from `gen:corpus`, built by `pnpm --filter @ahead/server build:index` (createIndex 5499 ms, loadIndex 2427 ms warm). Query wall-clock p50 1.9 ms, p95 2.5 ms (20 queries, k=3).
+
+Top-3 by `alpha` (hybrid weight, lower = more keyword):
+
+| Query | 0.3 | 0.5 | 0.7 |
+| --- | --- | --- | --- |
+| draft a message to priya | `contact-priya` at 3 | not in top 3 (rank 4) | not in top 5 |
+| priya thursday | `evt-priya-q3` at 1 | `evt-priya-q3` at 1 | `evt-priya-q3` at 2 |
+| what time is my priya meeting | `evt-priya-q3` at 3 | `evt-priya-q3` at 3 | not in top 5 |
+
+`MossIndex` uses `alpha: 0.3`. The note `note-2026-10-20-q3-planning` often ranks first for Priya queries, so rely on rank within top 3, not top 1.
+
 ### Index names (rule)
 
 - The free plan allows 3 indexes total.

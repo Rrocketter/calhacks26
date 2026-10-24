@@ -1,3 +1,5 @@
+import type { MossHit } from '@ahead/contracts';
+
 export type CorpusDoc = {
   id: string;
   text: string;
@@ -10,3 +12,12 @@ export type CorpusDoc = {
     title?: string;
   };
 };
+
+export type RetrievedHit = MossHit & { metadata: Record<string, string> };
+
+export interface Retriever {
+  query(
+    text: string,
+    opts?: { k?: number; filter?: object },
+  ): Promise<{ hits: RetrievedHit[]; latencyMs: number }>;
+}
