@@ -174,6 +174,31 @@ Final transcript: `Draft a message to Priya saying, I'll see her Thursday at 2 f
 - AHEAD uses `turn.eager_end` as the "finalize speculation" signal. It must treat `turn.resume` as "un-finalize, keep speculating", not as a new turn.
 - In the spike run `turn.eager_end` appeared once and `turn.end` followed 345 ms later. `turn.resume` did not appear (the fixture has no mid-utterance pause), so its handling is untested live.
 
+### Live server path
+
+Run: `pnpm --filter @ahead/server dev` (background), then `pnpm --filter @ahead/server smoke:voice` (`-- --twice` for two turns on one socket). Client: `apps/server/src/voice/ink-client.ts`. The smoke streams the fixture as 100 ms `audio_chunk`s, then zero frames like a live mic.
+
+| Run | Partials | Gap mean / max | TTFA server (`metric ttfa`) | TTFA client (`turn_end` to first chunk) |
+| --- | --- | --- | --- | --- |
+| 1 | 17 | 251 / 737 ms | 84.9 ms | 84 ms |
+| 2 | 17 | 252 / 593 ms | 72.1 ms | 74 ms |
+| 3 | 17 | 252 / 599 ms | 68.4 ms | 68 ms |
+| `--twice` turn 1 | 17 | 251 / 607 ms | 76.1 ms | 76 ms |
+| `--twice` turn 2 | 15 | 245 / 594 ms | 77.6 ms | 78 ms |
+| after 60 s idle | 17 | 251 / 608 ms | 95.4 ms | 97 ms |
+
+- Through the server, cadence matches the direct spike (about 250 ms). TTFA is 68 to 97 ms, well under the 400 ms target, because both Cartesia sockets are opened at connection time (`[ink] connect` 90 to 170 ms, `[sonic] connect` 90 to 190 ms).
+- Transcript identical to the spike in every normal run. `turn.end` came about 185 ms after `turn.eager_end`.
+- One Ink socket serves many turns. No `{"type":"close"}` is needed between turns; Ink did not close after `turn.end`. Two turns on one connection got different turn ids.
+- Idle: both sockets stayed open through 60 s with no frames sent at all. The lazy reconnect in `InkClient.sendPcm` was never triggered, so it is untested live.
+- `--twice` must wait out the reply before sending again. Sending right after `done` drops the first ~2 s of turn 2 (mic muted while the 1.6 s reply plays + 300 ms tail, `[voice] dropped 20 mic frames`).
+- Mute window seen: turn-end reply `mute until` +1615 to +1909 ms after its `done`; the mock interjection +5580 / +5929 ms (dropped 60 / 64 mic frames).
+
+**Mock belief run (`AHEAD_MOCK_BELIEF=1`, 2 runs, same result):**
+- `interject` at +2.85 s, first interjection chunk 76 to 78 ms later. The mic is muted for the rest of the fixture, so the final transcript stops at "Draft a message to Priya saying, I'll see her Thursday at".
+- Ink holds the last words until zeros reach it after the mute (+9.5 s), then `turn.end` arrives 5.6 s after the last partial. That is Ink's `end_timeout_ms` (default 5600 ms, query param `turn_end_timeout_ms`, range 640 to 11200): the cut-off sentence never drops the turn likelihood below `end_threshold`, so the timeout ends it.
+- Not in the docs: right after a timeout `turn.end`, Ink sent `turn.start` again 8 ms later, with only zeros flowing and no `turn.update` after it. That phantom turn makes `VoiceSession` cancel the turn-end reply before its first chunk and restart the mock belief stream (a second interjection at +18.5 s). It is still open when the smoke stops at 20 s.
+
 ## Factory Droid SDK
 
 **CANARY READ BYPASSED HANDLER.** Droid's `Read` and `LS` tools read files outside the workspace without ever calling the permission handler. The handler only scopes writes. Without the sandbox, treat everything the server process can read as readable by the model. See Confinement for the fix.

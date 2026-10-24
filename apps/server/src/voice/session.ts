@@ -27,6 +27,9 @@ export class VoiceSession {
   private readonly tracker = new TurnTracker();
   private badRateReported = false;
   private interjectedTurn: string | null = null;
+  /** Mic frames dropped during the current mute window. */
+  droppedFrames = 0;
+  private loggedMuteUntil = -Infinity;
 
   constructor(deps: {
     send: (e: ServerEvent) => void;
@@ -59,13 +62,27 @@ export class VoiceSession {
       }
       return;
     }
-    if (this.clock.isMuted(this.now())) return; // drop, never send zeros
+    if (this.clock.isMuted(this.now())) {
+      this.droppedFrames++; // drop, never send zeros
+      return;
+    }
+    if (this.droppedFrames > 0) {
+      console.log(`[voice] dropped ${this.droppedFrames} mic frames`);
+      this.droppedFrames = 0;
+    }
     this.ink.sendPcm(Buffer.from(ev.pcm, 'base64'));
   }
 
   handleTts(ev: ServerEvent): void {
     if (ev.type === 'tts_audio_chunk') {
-      this.clock.onChunk(ev.contextId, Buffer.byteLength(ev.pcm, 'base64'), ev.sampleRate, this.now());
+      const now = this.now();
+      this.clock.onChunk(ev.contextId, Buffer.byteLength(ev.pcm, 'base64'), ev.sampleRate, now);
+      // Log once per reply (on done) rather than on every chunk extension.
+      const until = this.clock.mutedUntil();
+      if (ev.done && until > this.loggedMuteUntil) {
+        this.loggedMuteUntil = until;
+        console.log(`[voice] mute until +${Math.round(until - now)}ms`);
+      }
     }
     this.send(ev);
   }

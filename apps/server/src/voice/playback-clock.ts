@@ -7,6 +7,8 @@ export interface PlaybackClock {
   onCancel(contextId: string, now: number): void;
   /** True while TTS is (estimated) playing, plus the tail. */
   isMuted(now: number): boolean;
+  /** Time the mute window ends (-Infinity when idle). */
+  mutedUntil(): number;
 }
 
 /** Models the browser queue: each buffer is scheduled at max(currentTime, nextStart). */
@@ -30,6 +32,10 @@ export class EstimatedPlaybackClock implements PlaybackClock {
   }
 
   isMuted(now: number): boolean {
-    return now < this.end + this.tailMs;
+    return now < this.mutedUntil();
+  }
+
+  mutedUntil(): number {
+    return this.end + this.tailMs;
   }
 }
