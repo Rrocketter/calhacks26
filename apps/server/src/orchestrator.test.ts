@@ -219,6 +219,14 @@ test("lookup final belief speaks the answerer's answer", async () => {
   assert.deepEqual(s.spoken, [{ text: 'Your meeting is at two.', opts: { interrupt: false, turnId: 't1' } }]);
 });
 
+test('every spoken line is also sent as assistant_reply text with its kind', async () => {
+  const s = setup({ finalBelief: () => belief('lookup') });
+  utter(s, 't1', 'When is my meeting?');
+  await settle();
+  const replies = s.ws.filter((e) => e.type === 'assistant_reply');
+  assert.deepEqual(replies, [{ type: 'assistant_reply', turnId: 't1', text: 'Your meeting is at two.', kind: 'answer' }]);
+});
+
 test('lookup puts upcoming calendar hits first, without duplicates, and passes today', async () => {
   let asked: { hits: string[]; today?: Date } | null = null;
   let upcomingFor: [string, string] | null = null;
@@ -270,6 +278,7 @@ test('speculative intent while SPECULATING speaks nothing at turn end; STAGED la
     { text: 'Apply?', opts: { interrupt: false, turnId: 't1' } },
   ]);
   assert.ok(s.ws.some((e) => e.type === 'state_change' && e.state === 'STAGED'));
+  assert.ok(s.ws.some((e) => e.type === 'assistant_reply' && e.text === 'Apply?' && e.kind === 'prompt'));
 });
 
 test('STAGED before turn end speaks at turn end', async () => {

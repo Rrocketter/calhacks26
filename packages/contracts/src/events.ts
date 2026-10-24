@@ -64,6 +64,13 @@ export const ServerEventSchema = z.discriminatedUnion('type', [
     ts: z.number(),
   }),
   z.object({ type: z.literal('interject'), turnId: z.string(), text: z.string() }),
+  // Every line AHEAD speaks, as text, so the HUD can caption it.
+  z.object({
+    type: z.literal('assistant_reply'),
+    turnId: z.string(),
+    text: z.string(),
+    kind: z.enum(['answer', 'interject', 'prompt', 'ack']),
+  }),
   z.object({
     type: z.literal('tts_audio_chunk'),
     turnId: z.string(),
@@ -81,6 +88,7 @@ export const ServerEventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('error'), message: z.string(), source: z.string().optional() }),
 ]);
 export type ServerEvent = z.infer<typeof ServerEventSchema>;
+export type ReplyKind = Extract<ServerEvent, { type: 'assistant_reply' }>['kind'];
 
 function parse<T>(schema: z.ZodType<T, z.ZodTypeDef, unknown>, raw: string): T | null {
   try {

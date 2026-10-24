@@ -130,6 +130,7 @@ test('interject speaks with interrupt', () => {
   const id = startedTurnId(sent);
   session.handleInterject(id, 'x');
   assert.ok(sent.some((e) => e.type === 'interject' && e.text === 'x' && e.turnId === id));
+  assert.ok(sent.some((e) => e.type === 'assistant_reply' && e.kind === 'interject' && e.text === 'x' && e.turnId === id));
   assert.deepEqual(speaks[0]?.opts, { interrupt: true, turnId: id });
   assert.equal(speaks[0]?.text, 'x');
 });

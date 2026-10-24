@@ -246,3 +246,13 @@ describe('retrieval A/B', () => {
     expect(run([metric('retrieval:pinecone', 0)]).retrieval).toBe('moss');
   });
 });
+
+describe('assistant replies', () => {
+  const reply = (turnId: string, text: string): ServerEvent => ({ type: 'assistant_reply', turnId, text, kind: 'ack' });
+  it('keeps the last six spoken lines in order, and a reset clears them', () => {
+    const s = run(['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((t, i) => reply(`t${i}`, t)));
+    expect(s.replies.map((r) => r.text)).toEqual(['b', 'c', 'd', 'e', 'f', 'g']);
+    expect(s.replies[0]).toEqual({ turnId: 't1', text: 'b', kind: 'ack' });
+    expect(hudReducer(s, { type: 'reset' }).replies).toEqual([]);
+  });
+});

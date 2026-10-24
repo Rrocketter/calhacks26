@@ -124,7 +124,10 @@ export class VoiceSession {
       }
       if (ev.type === 'turn_end' && finalText !== '') {
         if (this.onTurnEnd) this.onTurnEnd(ev.turnId, finalText);
-        else this.speaker.speak(TURN_END_REPLY, { interrupt: false, turnId: ev.turnId });
+        else {
+          this.send({ type: 'assistant_reply', turnId: ev.turnId, text: TURN_END_REPLY, kind: 'ack' });
+          this.speaker.speak(TURN_END_REPLY, { interrupt: false, turnId: ev.turnId });
+        }
       }
     }
   }
@@ -146,6 +149,7 @@ export class VoiceSession {
     if (this.interjectedTurn === turnId) return;
     this.interjectedTurn = turnId;
     this.send({ type: 'interject', turnId, text });
+    this.send({ type: 'assistant_reply', turnId, text, kind: 'interject' });
     this.speaker.speak(text, { interrupt: true, turnId });
   }
 

@@ -2,6 +2,7 @@ import {
   MEMORY_DOC_PREFIX,
   RETRIEVAL_MODES,
   type Belief,
+  type ReplyKind,
   type MossHit,
   type RetrievalMode,
   type ServerEvent,
@@ -17,6 +18,7 @@ export type Interject = {
   said: string | null;
   wordIndex: number | null;
 };
+export type Reply = { turnId: string; text: string; kind: ReplyKind };
 export type HudState = {
   turnId: string | null; // current turn: promoted from turn_start once it speaks
   // Ink can send a bare turn_start right after a timeout turn_end, so a new turn only takes
@@ -41,8 +43,11 @@ export type HudState = {
   confirm: ConfirmTarget | null; // the server is listening for a yes / no (confirm_window metric)
   retrieval: RetrievalMode; // confirmed by the server's retrieval:<mode> metric; kept across resets
   interjectLag: Partial<Record<RetrievalMode, number>>; // last interject_lag:<mode> metric per mode; kept across resets
+  replies: Reply[]; // what AHEAD said, as captions; last REPLIES_MAX
   error: string | null;
 };
+const REPLIES_MAX = 6;
+
 export type ConfirmTarget = { kind: 'correction' | 'apply'; turnId: string };
 export type HudAction = ServerEvent | { type: 'client_ttfa'; ms: number } | { type: 'reset' };
 
@@ -69,6 +74,7 @@ export function initialHud(): HudState {
     confirm: null,
     retrieval: 'moss',
     interjectLag: {},
+    replies: [],
     error: null,
   };
 }
@@ -277,6 +283,8 @@ export function hudReducer(s: HudState, a: HudAction): HudState {
         : s;
     case 'error':
       return { ...s, error: `${a.source ?? 'server'}: ${a.message}` };
+    case 'assistant_reply':
+      return { ...s, replies: [...s.replies, { turnId: a.turnId, text: a.text, kind: a.kind }].slice(-REPLIES_MAX) };
     case 'tts_audio_chunk':
       return s;
   }

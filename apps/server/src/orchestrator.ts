@@ -1,4 +1,4 @@
-import type { Belief, Claim, ClientEvent, DroidDiffPayload, MossHit, RetrievalMode, ServerEvent, State } from '@ahead/contracts';
+import type { Belief, Claim, ClientEvent, DroidDiffPayload, MossHit, ReplyKind, RetrievalMode, ServerEvent, State } from '@ahead/contracts';
 import { SPECULATIVE } from './executor/state-machine.js';
 import {
   APPLIED_REPLY,
@@ -236,7 +236,7 @@ export class Orchestrator {
       if (this.awaiting?.kind === 'apply' && this.awaiting.turnId === ev.turnId) this.release();
       if (this.spokenConfirm === ev.turnId) {
         this.spokenConfirm = null;
-        this.say(ev.state === 'COMMITTED' ? APPLIED_REPLY : DISCARDED_REPLY, ev.turnId);
+        this.say(ev.state === 'COMMITTED' ? APPLIED_REPLY : DISCARDED_REPLY, ev.turnId, 'ack');
       }
     }
   };
@@ -456,7 +456,7 @@ export class Orchestrator {
         answer = FALLBACK_REPLY;
       }
       console.log(`[orchestrator] lookup ${turnId} answer "${answer}"`);
-      this.say(answer, turnId);
+      this.say(answer, turnId, 'answer');
       return;
     }
     if (belief && SPECULATIVE.includes(belief.intent)) {
@@ -465,7 +465,7 @@ export class Orchestrator {
       if (state === 'SPECULATING') return; // STAGED speaks when it lands
       if (state === 'STAGED') return this.speakStaged(turnId);
     }
-    this.say(FALLBACK_REPLY, turnId);
+    this.say(FALLBACK_REPLY, turnId, 'answer');
   }
 
   private isSpecTurn(turnId: string): boolean {
@@ -476,7 +476,7 @@ export class Orchestrator {
     if (this.stagedSpoken.has(turnId) || !this.isSpecTurn(turnId)) return;
     this.stagedSpoken.add(turnId);
     const belief = this.lastBelief.get(turnId);
-    this.say(belief ? stagedLine(belief) : 'Apply?', turnId);
+    this.say(belief ? stagedLine(belief) : 'Apply?', turnId, 'prompt');
     this.setAwaiting({ kind: 'apply', turnId });
   }
 
@@ -506,7 +506,7 @@ export class Orchestrator {
       this.lastBelief.set(d.turnId, belief);
       this.d.send({ type: 'belief_update', turnId: d.turnId, belief });
     }
-    if (spoken) this.say(correctionAck(apply ? d.claim.known : d.claim.said), d.turnId);
+    if (spoken) this.say(correctionAck(apply ? d.claim.known : d.claim.said), d.turnId, 'ack');
   }
 
   // ---- helpers ----
@@ -579,8 +579,9 @@ export class Orchestrator {
     this.diffs.set(turnId, files);
   }
 
-  private say(text: string, turnId: string): void {
+  private say(text: string, turnId: string, kind: ReplyKind): void {
     if (this.closed) return;
+    this.d.send({ type: 'assistant_reply', turnId, text, kind });
     this.safely(() => void this.d.speaker.speak(text, { interrupt: false, turnId }), 'speak');
   }
 
