@@ -122,3 +122,15 @@ test('git failures reject with stderr', async () => {
   const { git } = makeRepo();
   await assert.rejects(git.resetTo('deadbeef'), /deadbeef|unknown revision|bad revision/i);
 });
+
+test('diffFiles returns non-ASCII paths unquoted (core.quotePath=false)', async () => {
+  const { root, git } = makeRepo();
+  await git.prepare('t1');
+  fs.mkdirSync(path.join(root, 'notes'));
+  fs.writeFileSync(path.join(root, 'notes', 'café.md'), 'hello\n');
+  await git.commitAll('phase1');
+  const diffs = await git.diffFiles('t1');
+  assert.equal(diffs.length, 1);
+  assert.equal(diffs[0]!.file, 'notes/café.md');
+  assert.match(diffs[0]!.diff, /\+hello/);
+});

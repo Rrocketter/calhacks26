@@ -1,6 +1,6 @@
 import type { Belief, ServerEvent } from '@ahead/contracts';
 import { initial, transition, type Effect, type SmCtx, type SmEvent } from './state-machine.js';
-import { SpeculationFailed, type Emit, type Executor } from './types.js';
+import { redact, SpeculationFailed, type Emit, type Executor } from './types.js';
 
 // Glue: server events -> StateMachine -> Executor calls (never awaited, so a resume can interrupt
 // a running phase 2) -> state_change events.
@@ -112,9 +112,12 @@ export class Speculator {
     const done: Promise<void> = p
       .then(onOk)
       .catch((err: unknown) => {
-        if (!(err instanceof SpeculationFailed)) {
-          const msg = err instanceof Error ? err.message : String(err);
-          this.emit({ type: 'error', source: 'droid', message: `${label}: ${msg}`.slice(0, 200) });
+        // A failed commit or rollback is always surfaced (R20): the machine has already moved on
+        // (COMMITTED ignores `failed`), so without this the HUD would show "applied" over an unchanged main.
+        if (label === 'commit' || label === 'rollback') {
+          this.emit({ type: 'error', source: 'droid', message: `${label} failed` });
+        } else if (!(err instanceof SpeculationFailed)) {
+          this.emit({ type: 'error', source: 'droid', message: `${label}: ${redact(err, 'error')}`.slice(0, 200) });
         }
         if (feedsFailure && turnId !== undefined && this.isCurrent(turnId)) this.feed({ type: 'failed' });
       })

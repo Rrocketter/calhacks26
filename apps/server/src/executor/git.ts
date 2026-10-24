@@ -3,7 +3,7 @@ import { promisify } from 'node:util';
 
 const run = promisify(execFile);
 
-const FLAGS = ['-c', 'core.hooksPath=/dev/null', '-c', 'user.name=ahead', '-c', 'user.email=ahead@localhost', '-c', 'commit.gpgsign=false'];
+const FLAGS = ['-c', 'core.hooksPath=/dev/null', '-c', 'core.quotePath=false', '-c', 'user.name=ahead', '-c', 'user.email=ahead@localhost', '-c', 'commit.gpgsign=false'];
 
 function gitEnv(): NodeJS.ProcessEnv {
   const env = { ...process.env };

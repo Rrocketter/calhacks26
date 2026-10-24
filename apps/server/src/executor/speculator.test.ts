@@ -6,7 +6,12 @@ import { Speculator } from './speculator.js';
 import { SpeculationFailed, type Executor } from './types.js';
 
 type Call = { name: string; args: unknown[] };
-type Opts = { withDenied?: boolean; phase2?: (turnId: string) => Promise<void> };
+type Opts = {
+  withDenied?: boolean;
+  phase2?: (turnId: string) => Promise<void>;
+  commit?: (turnId: string) => Promise<void>;
+  rollback?: (turnId: string) => Promise<void>;
+};
 
 function setup(opts: Opts = {}) {
   const calls: Call[] = [];
@@ -22,8 +27,14 @@ function setup(opts: Opts = {}) {
       for await (const ev of mockDroidRun(t, { withDenied: opts.withDenied })) emit(ev);
     },
     resetToPhase1: async (t) => void rec('resetToPhase1', [t]),
-    commit: async (t) => void rec('commit', [t]),
-    rollback: async (t) => void rec('rollback', [t]),
+    commit: async (t) => {
+      rec('commit', [t]);
+      if (opts.commit) return opts.commit(t);
+    },
+    rollback: async (t) => {
+      rec('rollback', [t]);
+      if (opts.rollback) return opts.rollback(t);
+    },
   };
   const spec = new Speculator(executor, emit);
   const names = () => calls.map((c) => c.name);
@@ -235,4 +246,51 @@ test('no unhandled rejections from failing executor methods', async () => {
   } finally {
     process.off('unhandledRejection', h);
   }
+});
+
+const errors = (events: ServerEvent[]) => events.flatMap((e) => (e.type === 'error' ? [e] : []));
+
+test('commit rejecting with SpeculationFailed emits one error event "commit failed"', async () => {
+  const s = setup({ commit: () => Promise.reject(new SpeculationFailed('git merge failed')) });
+  s.spec.onServerEvent(ev('turn_start', 't1'));
+  s.spec.onServerEvent(bu('t1', belief('draft_message', 0.8)));
+  s.spec.onServerEvent(ev('turn_eager_end', 't1'));
+  await s.spec.idle();
+  s.spec.onConfirm('t1', true);
+  await s.spec.idle();
+  assert.ok(s.names().includes('commit'));
+  assert.deepEqual(errors(s.events), [{ type: 'error', source: 'droid', message: 'commit failed' }]);
+  for (const e of s.events) parseServerEvent(JSON.stringify(e));
+});
+
+test('rollback rejecting with SpeculationFailed emits one error event "rollback failed"', async () => {
+  const s = setup({ rollback: () => Promise.reject(new SpeculationFailed('git discard failed')) });
+  s.spec.onServerEvent(ev('turn_start', 't1'));
+  s.spec.onServerEvent(bu('t1', belief('draft_message', 0.8)));
+  s.spec.onServerEvent(ev('turn_eager_end', 't1'));
+  await s.spec.idle();
+  s.spec.onConfirm('t1', false);
+  await s.spec.idle();
+  assert.ok(s.names().includes('rollback'));
+  assert.deepEqual(errors(s.events), [{ type: 'error', source: 'droid', message: 'rollback failed' }]);
+  for (const e of s.events) parseServerEvent(JSON.stringify(e));
+});
+
+test('non-SpeculationFailed error messages are redacted of env values', async (t) => {
+  const secret = 'sk-test-0123456789abcdef';
+  process.env.AHEAD_TEST_SECRET = secret;
+  t.after(() => void delete process.env.AHEAD_TEST_SECRET);
+  const events: ServerEvent[] = [];
+  const executor: Executor = {
+    warm: () => Promise.reject(new Error(`bad key ${secret}`)),
+    phase1: async () => undefined, phase2: async () => undefined, resetToPhase1: async () => undefined,
+    commit: async () => undefined, rollback: async () => undefined,
+  };
+  const spec = new Speculator(executor, (e) => void events.push(e));
+  spec.start();
+  await spec.idle();
+  const errs = errors(events);
+  assert.equal(errs.length, 1);
+  assert.ok(!errs[0]!.message.includes(secret));
+  assert.match(errs[0]!.message, /^warm: bad key \[redacted\]$/);
 });

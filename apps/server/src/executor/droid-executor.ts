@@ -12,19 +12,21 @@ import { makeGuard, type Guard } from './guard.js';
 import { phase1Prompt, phase2Prompt } from './prompts.js';
 import { openDroidSession, writeSandboxSettings } from './sandbox.js';
 import { makePermissionHandler, runTurn, type PermissionHandler } from './turn.js';
-import { SpeculationFailed, type DroidLike, type Emit, type Executor } from './types.js';
+import { redact, SpeculationFailed, type DroidLike, type Emit, type Executor } from './types.js';
 
-const SESSION_TIMEOUT_MS = 180_000;
-const ERROR_CAP = 200;
+const PHASE_TIMEOUT_MS = 180_000;
 
 export type OpenSession = (handler: PermissionHandler, signal: AbortSignal) => Promise<DroidLike>;
 
 export interface DroidExecutorOptions {
+  // Production must pass WORKSPACE_DIR: openDroidSession uses that global as the Droid cwd.
   workspace: string;
   emit: Emit;
   openSession: OpenSession;
   graceMs?: number;
   now?: () => Date;
+  // Per-phase limit on one runTurn (R21); default PHASE_TIMEOUT_MS. Idle warm time does not count.
+  phaseTimeoutMs?: number;
 }
 
 interface Live {
@@ -35,13 +37,6 @@ interface Live {
 interface Running {
   turnId: string;
   phase: 'phase1' | 'phase2';
-}
-
-// Short single-line message with every env value of 8+ chars masked.
-function redact(e: unknown): string {
-  let msg = (e instanceof Error ? e.message : String(e)).replace(/\s+/g, ' ').trim();
-  for (const v of Object.values(process.env)) if (v && v.length >= 8) msg = msg.split(v).join('[redacted]');
-  return (msg || 'droid session failed').slice(0, ERROR_CAP);
 }
 
 // Workspace-relative paths of every file under files/, sorted. Missing dir gives [].
@@ -69,7 +64,8 @@ export class DroidExecutor implements Executor {
   private readonly guard: Guard;
   private readonly handler: PermissionHandler;
   private session: DroidLike | null = null;
-  private sessionTimer: NodeJS.Timeout | null = null;
+  // Aborted only by closeSession(), never by a timer.
+  private sessionAbort: AbortController | null = null;
   private opening: Promise<void> | null = null;
   private live: Live | null = null;
   // Turn of the most recent phase1() call, set at call time (live is only set once that phase1 runs).
@@ -101,17 +97,34 @@ export class DroidExecutor implements Executor {
   }
 
   private async closeSession(): Promise<void> {
-    if (this.sessionTimer) clearTimeout(this.sessionTimer);
-    this.sessionTimer = null;
+    const ac = this.sessionAbort;
+    this.sessionAbort = null;
     const s = this.session;
     this.session = null;
     if (s) await s.close().catch(() => undefined);
+    ac?.abort();
   }
 
   private async fail(reason: string, cause?: unknown): Promise<never> {
     await this.closeSession();
     console.log(`[droid] speculation failed: ${reason}`);
     throw new SpeculationFailed(reason, cause === undefined ? undefined : { cause });
+  }
+
+  // Runs one phase's turn under the per-phase timeout. On expiry it interrupts the turn, which then
+  // ends as a non-success outcome and goes through fail(), closing the session.
+  private async timed<T>(s: DroidLike, label: string, run: () => Promise<T>): Promise<T> {
+    const ms = this.opts.phaseTimeoutMs ?? PHASE_TIMEOUT_MS;
+    const timer = setTimeout(() => {
+      console.log(`[droid] ${label} timeout after ${ms}ms, interrupting`);
+      void s.interrupt().catch(() => undefined);
+    }, ms);
+    timer.unref();
+    try {
+      return await run();
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   // Interrupt the running phase if it is one the caller supersedes; errors ignored.
@@ -138,23 +151,13 @@ export class DroidExecutor implements Executor {
 
   private async open(): Promise<void> {
     const ac = new AbortController();
-    const timer = setTimeout(() => {
-      console.log('[droid] session timeout, aborting');
-      ac.abort();
-      if (this.sessionTimer === timer) {
-        this.sessionTimer = null;
-        this.session = null;
-      }
-    }, SESSION_TIMEOUT_MS);
-    timer.unref();
     const t0 = performance.now();
     try {
       const s = await this.opts.openSession(this.handler, ac.signal);
       this.metric('createSession', performance.now() - t0);
       this.session = s;
-      this.sessionTimer = timer;
+      this.sessionAbort = ac;
     } catch (e) {
-      clearTimeout(timer);
       const message = redact(e);
       console.log(`[droid] createSession failed msgLen=${message.length}`);
       this.opts.emit({ type: 'error', source: 'droid', message });
@@ -182,11 +185,11 @@ export class DroidExecutor implements Executor {
       // A rollback that arrived during session open or prepare had nothing to interrupt.
       if (gen !== this.rollbackGen) return;
       this.running = { turnId, phase: 'phase1' };
-      const r = await runTurn(s, prompt, { turnId, guard: this.guard, emit: this.opts.emit, graceMs: this.opts.graceMs }).finally(
-        () => {
-          this.running = null;
-        },
-      );
+      const r = await this.timed(s, 'phase1', () =>
+        runTurn(s, prompt, { turnId, guard: this.guard, emit: this.opts.emit, graceMs: this.opts.graceMs }),
+      ).finally(() => {
+        this.running = null;
+      });
       if (gen !== this.rollbackGen) return;
       if (r.outcome !== 'success') return this.fail(`phase1 ${r.outcome}`);
       try {
@@ -211,12 +214,14 @@ export class DroidExecutor implements Executor {
       const t0 = performance.now();
       const now = this.opts.now?.() ?? new Date();
       this.running = { turnId, phase: 'phase2' };
-      const r = await runTurn(s, phase2Prompt(belief, now), {
-        turnId,
-        guard: this.guard,
-        emit: this.opts.emit,
-        graceMs: this.opts.graceMs,
-      }).finally(() => {
+      const r = await this.timed(s, 'phase2', () =>
+        runTurn(s, phase2Prompt(belief, now), {
+          turnId,
+          guard: this.guard,
+          emit: this.opts.emit,
+          graceMs: this.opts.graceMs,
+        }),
+      ).finally(() => {
         this.running = null;
       });
       if (superseded()) return;

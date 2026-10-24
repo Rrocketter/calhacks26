@@ -206,7 +206,7 @@ export async function runTurn(
         console.log(`[droid] done ${ev.subtype} ${since()}`);
         // Release the SDK stream bridge (no next() is pending here). A bare break leaves the
         // generator suspended, and the next stream() on this session throws ConcurrentStreamError.
-        if (!aborted) await it.return?.(undefined);
+        if (!aborted) await it.return?.(undefined)?.catch(() => undefined);
         break;
       }
     }

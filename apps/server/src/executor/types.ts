@@ -22,3 +22,12 @@ export interface DroidLike {
 export class SpeculationFailed extends Error {
   override name = 'SpeculationFailed';
 }
+
+const ERROR_CAP = 200;
+
+// Short single-line message with every env value of 8+ chars masked.
+export function redact(e: unknown, fallback = 'droid session failed'): string {
+  let msg = (e instanceof Error ? e.message : String(e)).replace(/\s+/g, ' ').trim();
+  for (const v of Object.values(process.env)) if (v && v.length >= 8) msg = msg.split(v).join('[redacted]');
+  return (msg || fallback).slice(0, ERROR_CAP);
+}

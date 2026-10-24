@@ -158,7 +158,7 @@ const belief = (intent: Belief['intent'] = 'reschedule_event'): Belief => ({
   latencyMs: { moss: 1 },
 });
 
-function setup(opts: { fail?: string } = {}) {
+function setup(opts: { fail?: string; phaseTimeoutMs?: number } = {}) {
   const ws = makeWorkspace();
   const f = factory(ws.root, opts);
   const events: ServerEvent[] = [];
@@ -168,6 +168,7 @@ function setup(opts: { fail?: string } = {}) {
     openSession: f.open,
     graceMs: 50,
     now: () => new Date('2026-10-24T19:00:00Z'),
+    ...(opts.phaseTimeoutMs === undefined ? {} : { phaseTimeoutMs: opts.phaseTimeoutMs }),
   });
   return { ...ws, f, events, exec };
 }
@@ -520,4 +521,41 @@ test('close() is terminal: phase1 and phase2 reject with SpeculationFailed', { t
   await assert.rejects(exec.phase1('t1', belief()), (e: unknown) => e instanceof SpeculationFailed && e.message === 'executor closed');
   await assert.rejects(exec.phase2('t1', belief()), (e: unknown) => e instanceof SpeculationFailed && e.message === 'executor closed');
   assert.equal(f.sessions.length, 0);
+});
+
+test('a warm session idle longer than phaseTimeoutMs still runs phase1', { timeout: 5000 }, async () => {
+  const { git, f, events, exec } = setup({ phaseTimeoutMs: 50 });
+  await exec.warm();
+  await new Promise((r) => setTimeout(r, 100));
+  await exec.phase1('t1', belief());
+  assert.equal(f.sessions.length, 1);
+  assert.deepEqual(f.sessions[0]!.calls, []);
+  assert.equal(f.signals[0]!.aborted, false);
+  assert.equal(await git.currentBranch(), 'spec/t1');
+  assert.ok(metrics(events).includes('phase1'));
+  assertValid(events);
+});
+
+// The phase timer is unref'd; hold the event loop open the way the running server would.
+function keepAlive<T>(p: Promise<T>): Promise<T> {
+  const keep = setInterval(() => undefined, 1000);
+  return p.finally(() => clearInterval(keep));
+}
+
+test('a phase1 stream blocked past phaseTimeoutMs is interrupted, rejects, and closes the session', { timeout: 5000 }, async () => {
+  const { f, events, exec } = setup({ phaseTimeoutMs: 50 });
+  f.phase1.push('block');
+  await assert.rejects(keepAlive(exec.phase1('t1', belief())), SpeculationFailed);
+  assert.deepEqual(f.sessions[0]!.calls, ['interrupt', 'close']);
+  assert.equal(f.signals[0]!.aborted, true);
+  assertValid(events);
+});
+
+test('a phase2 stream blocked past phaseTimeoutMs is interrupted, rejects, and closes the session', { timeout: 5000 }, async () => {
+  const { f, events, exec } = setup({ phaseTimeoutMs: 50 });
+  await exec.phase1('t1', belief());
+  f.phase2.push('block');
+  await assert.rejects(keepAlive(exec.phase2('t1', belief())), SpeculationFailed);
+  assert.deepEqual(f.sessions[0]!.calls, ['interrupt', 'close']);
+  assertValid(events);
 });

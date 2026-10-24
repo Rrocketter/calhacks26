@@ -290,3 +290,22 @@ test('TodoWrite with a string todos list maps each line to a plan step', async (
     assertValid(events);
   }
 });
+
+test('a rejecting iterator return() after a normal Result still yields success', async () => {
+  const s: DroidLike = {
+    stream() {
+      const events = [text('done'), result('success')];
+      return {
+        [Symbol.asyncIterator]: () => ({
+          next: async () => (events.length ? { done: false as const, value: events.shift()! } : { done: true as const, value: undefined }),
+          return: () => Promise.reject(new Error('bridge already released')),
+        }),
+      };
+    },
+    interrupt: async () => undefined,
+    close: async () => undefined,
+  };
+  const r = await runTurn(s, 'go', { turnId: 't', guard, emit: () => undefined });
+  assert.equal(r.outcome, 'success');
+  assert.equal(r.summary, 'done');
+});
