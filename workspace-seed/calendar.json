@@ -1,0 +1,44 @@
+{
+  "events": [
+    {
+      "id": "evt-standup-mon",
+      "title": "Team standup",
+      "start": "2026-10-26T09:30:00-07:00",
+      "end": "2026-10-26T09:45:00-07:00",
+      "attendees": ["Marcus Lee", "Dana Ortiz"],
+      "location": "Zoom"
+    },
+    {
+      "id": "evt-dentist",
+      "title": "Dentist appointment",
+      "start": "2026-10-27T11:00:00-07:00",
+      "end": "2026-10-27T12:00:00-07:00",
+      "attendees": [],
+      "location": "Bayview Dental, 410 Pine St"
+    },
+    {
+      "id": "evt-lunch-marcus",
+      "title": "Lunch with Marcus",
+      "start": "2026-10-28T12:30:00-07:00",
+      "end": "2026-10-28T13:30:00-07:00",
+      "attendees": ["Marcus Lee"],
+      "location": "Tartine, Mission"
+    },
+    {
+      "id": "evt-priya-q3",
+      "title": "Q3 deck review with Priya",
+      "start": "2026-10-30T14:00:00-07:00",
+      "end": "2026-10-30T15:00:00-07:00",
+      "attendees": ["Priya Shah"],
+      "location": "Conference Room B"
+    },
+    {
+      "id": "evt-offsite-prep",
+      "title": "Offsite planning sync",
+      "start": "2026-10-30T10:00:00-07:00",
+      "end": "2026-10-30T10:30:00-07:00",
+      "attendees": ["Dana Ortiz"],
+      "location": "Zoom"
+    }
+  ]
+}

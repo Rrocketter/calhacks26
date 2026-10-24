@@ -1,0 +1,5 @@
+Budget 2026 (draft, plain-text export)
+Category,Q1,Q2,Q3,Q4
+Headcount,420000,430000,445000,450000
+Cloud,80000,85000,92000,98000
+Travel,15000,12000,20000,18000

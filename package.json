@@ -10,7 +10,8 @@
     "build": "pnpm -r build",
     "lint": "pnpm -r lint",
     "test": "pnpm -r test",
-    "check:secrets": "node scripts/check-secrets.mjs"
+    "check:secrets": "node scripts/check-secrets.mjs",
+    "reset:workspace": "node scripts/reset-workspace.mjs"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

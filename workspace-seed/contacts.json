@@ -1,0 +1,32 @@
+{
+  "contacts": [
+    {
+      "id": "contact-priya",
+      "name": "Priya Shah",
+      "email": "priya.shah@example.com",
+      "phone": "+1-415-555-0142",
+      "notes": "Head of product. Owns the Q3 deck review."
+    },
+    {
+      "id": "contact-marcus",
+      "name": "Marcus Lee",
+      "email": "marcus.lee@example.com",
+      "phone": "+1-415-555-0178",
+      "notes": "Engineering lead. Lunch most Wednesdays."
+    },
+    {
+      "id": "contact-dana",
+      "name": "Dana Ortiz",
+      "email": "dana.ortiz@example.com",
+      "phone": "+1-415-555-0113",
+      "notes": "Runs ops and the offsite planning."
+    },
+    {
+      "id": "contact-sam",
+      "name": "Sam Rivera",
+      "email": "sam.rivera@example.com",
+      "phone": "+1-415-555-0196",
+      "notes": "Finance partner. Keeper of the 2026 budget sheet."
+    }
+  ]
+}
