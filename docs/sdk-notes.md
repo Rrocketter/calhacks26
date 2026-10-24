@@ -311,3 +311,25 @@ Both runs passed twice on 2026-10-24 (claude-haiku-5-5, droid CLI v0.249.0). Eve
 - **TodoWrite input is a string, not an array.** The CLI schema is `TodoWriteToolInputSchema = { todos: z.string() }` (`@factory/droid-sdk` `dist/chunk-TWAVPIPS.mjs`), and the model sends checklist lines like `1. [completed] Read calendar.json`. The SDK's own `parseTodos` also accepts arrays and a JSON-array string, but it isn't exported. Run 1 emitted every `plan` event with `steps=0` because `turn.ts` only read arrays; `turn.ts` now parses all those shapes (`todoSteps`, regression test in `turn.test.ts`), and Run 2 showed 4 to 5 steps per plan.
 - No edits in Phase 1 in any run (Phase 1 only Read and TodoWrite), and the model never called a disabled tool.
 - After commit or rollback the state machine warms a fresh session. `DroidExecutor.close()` shuts it down so a script or a server shutdown can exit cleanly. `close()` is terminal: afterwards `warm()` opens nothing and phases throw `SpeculationFailed('executor closed')`.
+
+#### After latency fixes
+
+Three more smoke runs on 2026-10-24 after two changes: every Phase 2 template now says `Stop immediately after the edit. Do not re-read the file or update the plan.` (find_file: reply with the path), and the executor emits the diff as soon as a Create/Edit/ApplyPatch result returns (`git add -A` plus `git diff --cached main` on the working tree), instead of at turn end. All six runs passed. Each emitted exactly one `diff` event (`calendar.json`, 471 characters): the end-of-phase diff matched the early one, so nothing was re-emitted. No denied tool calls.
+
+`phase2-to-first-diff` runs from `turn_eager_end` to the first `diff` event. `lock-to-first-diff` runs from the belief lock to that event. `lock-to-diff` runs to the `result` event, where the old turn-end diff used to go, so it lines up with the earlier "belief lock to diff" row.
+
+| ms | Run 1 commit | Run 1 rollback | Run 2 commit | Run 2 rollback | Run 3 commit | Run 3 rollback |
+|---|---|---|---|---|---|---|
+| createSession | 793 | 526 | 745 | 570 | 794 | 639 |
+| Phase 1 | 7224 | 7204 | 6842 | 6867 | 16598 | 6219 |
+| Phase 2 | 10765 | 10971 | 10376 | 12133 | 14767 | 11476 |
+| phase2-to-first-diff | 3757 | 3416 | 3365 | 5323 | 4435 | 4630 |
+| lock-to-first-diff | 10981 | 10620 | 10207 | 12190 | 21034 | 10849 |
+| lock-to-diff | 18017 | 18209 | 17242 | 19026 | 31387 | 17725 |
+| commit / rollback | 1616 | 1351 | 1482 | 1045 | 1221 | 1489 |
+
+Before/after: the diff used to reach the HUD 19.3 to 29.3 s after the belief lock (Phase 2 11.1 to 14.6 s). It now arrives 10.2 to 21.0 s after the lock, 3.4 to 5.3 s into Phase 2.
+
+- The stop line cut the post-edit tool calls but not the post-edit time. In 5 of 6 runs Phase 2 made no tool call after the Edit, yet the turn still ended 6.8 to 7.5 s after the Edit result: that's reply text only. Phase 2 as a whole (10.4 to 14.8 s) is about the same as before, so the early diff is what moved the number.
+- Run 3 commit: the model still called TodoWrite after the Edit (+13.4 s), ignoring "do not update the plan". Its Phase 1 also took 16.6 s with two TodoWrite calls, which is what pushed that run's lock-to-first-diff to 21 s.
+- The early diff and the committed diff are byte-identical for a modified file and for a new file (`git.test.ts` checks both), which is why the end-of-phase pass re-emits nothing.
