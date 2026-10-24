@@ -12,7 +12,8 @@
     "test": "pnpm -r test && pnpm test:scripts",
     "test:scripts": "node --test scripts/",
     "check:secrets": "node scripts/check-secrets.mjs",
-    "reset:workspace": "node scripts/reset-workspace.mjs"
+    "reset:workspace": "node scripts/reset-workspace.mjs",
+    "import:google": "pnpm --filter @ahead/server import:google"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

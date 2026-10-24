@@ -10,6 +10,7 @@
     "test": "node --import tsx --test scripts/*.test.ts src/*.test.ts src/*/*.test.ts",
     "gen:corpus": "node --import tsx scripts/gen-corpus.ts",
     "build:index": "MOSS_DISABLE_TELEMETRY=1 node --env-file=../../.env --import tsx scripts/build-index.ts",
+    "import:google": "node --env-file=../../.env --import tsx scripts/import-google.ts",
     "replay": "MOSS_DISABLE_TELEMETRY=1 node --env-file=../../.env --import tsx scripts/replay.ts",
     "spike:ink": "node --env-file=../../.env --import tsx scripts/spike-ink.ts",
     "spike:sonic": "node --env-file=../../.env --import tsx scripts/spike-sonic.ts",
