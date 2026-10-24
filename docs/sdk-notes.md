@@ -9,7 +9,7 @@ Other sections are added per spike. Numbers are measured output from the spike s
 - Calls used: `new MossClient(projectId, projectKey)`, `listIndexes()`, `deleteIndex(name)`, `createIndex(name, docs, {modelId: 'moss-minilm'})`, `loadIndex(name)`, `query(name, text, {topK})`, `close()` in `finally`.
 - Docs are `{id, text, metadata}`; metadata values must be strings.
 - `createIndex` on an existing name throws "Index already exists", so list and delete first.
-- `loadIndex` must be called before `query` (no cloud fallback in 1.21.0).
+- `loadIndex` must be called before `query` (queries run locally; there is no cloud query fallback). Source: the SDK's own error when querying an unloaded index in 1.21.0: `NOT_FOUND Index "nope" is not loaded. Call loadIndex("nope") or loadIndexes([...]) before querying; queries run locally and there is no cloud query fallback.`
 
 ### Measured (10 docs, 20 timed queries)
 
@@ -34,7 +34,7 @@ Top hits:
 
 ### Quirks
 
-- `loadIndex` took about 20 s on this first run. Likely the embedding model downloading from models.moss.link at runtime. Call `loadIndex` at server startup, never on the request path. Re-measure on a warm run.
+- `loadIndex` took about 20 s on the cold first run and 2.2 s on the warm second run. The cause of the cold cost (possibly an embedding model download) is unconfirmed, see Model cache above. Call `loadIndex` at server startup, never on the request path.
 - Queries are in-process and fast (about 2 ms) once loaded, well under the 10 ms target.
 - Scores are not comparable across queries (a 1.000 top score for "q3 deck" still ranked the contact above the file). Do not threshold on raw score without tuning. Short queries like "q3 deck" may favor the contact doc; consider `alpha` tuning or richer doc text in the corpus.
 - `timeTakenInMs` is integer-resolution, so measure latency with `performance.now()` around the call.
@@ -107,7 +107,7 @@ Final transcript: `Draft a message to Priya saying, I'll see her Thursday at 2 f
 
 - Spoken "two" comes back as "2", and a comma appears after "saying". Do not match on exact strings; normalize before intent matching.
 - Several updates arrive within a few ms of each other (for example +3204, +3219, +3236), so debounce downstream.
-- The last `turn.update`, `turn.eager_end` and the final update land at the same instant (+5380 ms). The final update adds a trailing period.
+- The final `turn.update` and `turn.eager_end` arrived in the same millisecond (+5380 ms), and `turn.end` followed 345 ms later. The final update adds a trailing period.
 - `say` writes a WAV that `file` describes only as "RIFF data, WAVE audio", so the spike's parser walks chunks to find `fmt ` and `data`.
 - Errors print as `[ink] error <title> <message>`. Headers and keys are never printed.
 
@@ -157,7 +157,7 @@ write-inside: ok
 write-outside: denied
 canary-read: handler-saw=no succeeded=yes bytes=101
 canary leaked to model: no
-git -C ~/.ahead/workspace status --short:
+git -C var/workspace status --short:   (pre-move run)
 ?? notes/spike.md
 ```
 

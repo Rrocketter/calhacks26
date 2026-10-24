@@ -8,6 +8,8 @@ const FRAME_BYTES = 3200; // 100 ms at 16 kHz s16le mono
 const FRAME_MS = 100;
 const SILENCE_MS = 2500;
 const END_TIMEOUT_MS = 15000;
+const CONNECT_TIMEOUT_MS = 5000;
+const CLOSE_GRACE_MS = 3000;
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const wavPath = path.join(here, 'fixtures', 'demo-utterance-1.wav');
@@ -51,13 +53,16 @@ const ws = new WebSocket(url, { headers: { 'X-API-Key': apiKey } });
 let t0 = 0; // first audio byte
 const since = () => (t0 ? Math.round(performance.now() - t0) : 0);
 let lastSpeechFrameAt = 0;
-let lastFrameAt = 0;
 let failed = false;
 const updateTimes: number[] = [];
 const eagerTimes: number[] = [];
 const endTimes: number[] = [];
 let finalTranscript = '';
 let endTimer: NodeJS.Timeout | undefined;
+const connectTimer = setTimeout(() => {
+  fail(`[ink] error connect timeout ${CONNECT_TIMEOUT_MS}ms`);
+  process.exit(1);
+}, CONNECT_TIMEOUT_MS);
 
 function fail(msg: string): void {
   console.log(msg);
@@ -82,7 +87,8 @@ ws.on('message', (data, isBinary) => {
   const now = since();
   if (type === 'error') {
     fail(`[ink] error ${msg.title} ${msg.message}`);
-    return;
+    report();
+    process.exit(1);
   }
   const tr = msg.transcript !== undefined ? ` "${msg.transcript}"` : '';
   console.log(`[ink] ${type} +${now}ms${tr}`);
@@ -91,6 +97,12 @@ ws.on('message', (data, isBinary) => {
   if (type === 'turn.end') {
     endTimes.push(now);
     finalTranscript = msg.transcript ?? '';
+    // server should close after turn.end; do not hang if it does not
+    setTimeout(() => {
+      console.log('[ink] server did not close within 3s of turn.end');
+      report();
+      process.exit(failed ? 1 : 0);
+    }, CLOSE_GRACE_MS).unref();
   }
 });
 
@@ -154,7 +166,6 @@ async function stream(): Promise<void> {
       frame = Buffer.alloc(FRAME_BYTES);
     }
     ws.send(frame);
-    lastFrameAt = performance.now();
   }
   ws.send(JSON.stringify({ type: 'close' }));
   endTimer = setTimeout(() => {
@@ -164,10 +175,10 @@ async function stream(): Promise<void> {
       process.exit(1);
     }
   }, END_TIMEOUT_MS);
-  void lastFrameAt;
 }
 
 ws.on('open', () => {
+  clearTimeout(connectTimer);
   console.log('[ink] open');
   stream().catch((e: unknown) => {
     fail(`[ink] error stream ${e instanceof Error ? e.message : String(e)}`);
