@@ -38,7 +38,12 @@ let applyAnswered = false;
 let finalState: string | null = null;
 const openCtx = new Map<string, string>(); // contextId -> turnId
 const seenContexts = new Set<string>();
-let lastTtsDoneAt = -1;
+let stagedCtx: string | null = null; // first fixture-turn TTS context opened after STAGED
+let stagedLineDone = false;
+let correctionExpired = false; // server's correction window closed before we could answer
+const CORRECTION_WINDOW_MS = 8000;
+let turnEndAt = 0;
+const changed: string[] = [];
 let correctionAfter: number | null = null; // earliest time the correction may be answered
 
 const ws = new WebSocket(`ws://localhost:${PORT}/ws`);
@@ -50,6 +55,11 @@ const finished = new Promise<void>((r) => (finish = r));
 
 function answerCorrection(): void {
   corrected = true;
+  if (since() > turnEndAt + CORRECTION_WINDOW_MS) {
+    correctionExpired = true;
+    console.log('WARN: correction window (8000 ms after turn_end) already passed; not answering, treating as not accepted');
+    return;
+  }
   const yes = !NO_CORRECT;
   console.log(`> answering correction: ${yes ? 'yes' : 'no'} (${confirm})`);
   if (confirm === 'spoken') send({ type: 'demo_control', action: 'start', fixture: yes ? 'demo-yes' : 'demo-no' });
@@ -70,7 +80,7 @@ function tick(): void {
   if (interjected && turnEnded && !corrected && !fixtureTtsOpen() && (correctionAfter === null || now >= correctionAfter)) {
     answerCorrection();
   }
-  if (stagedSeen && !applyAnswered && (lastTtsDoneAt >= stagedAt || now - stagedAt > TTS_WAIT_MS)) {
+  if (stagedSeen && !applyAnswered && (stagedLineDone || now - stagedAt > TTS_WAIT_MS)) {
     // Do not race the correction answer: it must go first.
     if (!interjected || corrected) answerApply();
   }
@@ -99,6 +109,7 @@ function onEvent(e: ServerEvent): void {
         mark('turn_end', now);
         // Give the interject/reply speech a moment to open its TTS context.
         correctionAfter = now + 500;
+        turnEndAt = now;
         setTimeout(tick, 550);
       }
       break;
@@ -133,10 +144,11 @@ function onEvent(e: ServerEvent): void {
       const ctx = e.contextId.slice(0, 8);
       if (e.done) {
         openCtx.delete(e.contextId);
-        lastTtsDoneAt = now;
+        if (e.contextId === stagedCtx) stagedLineDone = true;
         detail = ` done ctx=${ctx} turn=${e.turnId}`;
       } else {
         openCtx.set(e.contextId, e.turnId);
+        if (stagedSeen && stagedCtx === null && e.turnId === fixtureTurn && !seenContexts.has(e.contextId)) stagedCtx = e.contextId;
         if (seenContexts.has(e.contextId)) return;
         detail = ` ctx=${ctx} turn=${e.turnId}`;
       }
@@ -186,12 +198,11 @@ ws.on('open', async () => {
   ws.close();
 
   const problems: string[] = [];
-  let stat = '';
   let priya = '';
   try {
     const subject = git('log', '-1', '--format=%s', 'main').trim();
-    stat = git('show', 'main', '--stat');
-    console.log(`--- workspace main: ${subject} ---\n${stat}`);
+    changed.push(...git('diff-tree', '--no-commit-id', '--name-only', '-r', 'main').split('\n').filter(Boolean));
+    console.log(`--- workspace main: ${subject} ---\n${git('show', 'main', '--stat')}`);
     if (finalState === 'COMMITTED') priya = git('show', 'main:messages/outbox/priya.md');
   } catch (err) {
     problems.push(`workspace git failed: ${(err as Error).message.split('\n')[0]}`);
@@ -215,8 +226,9 @@ ws.on('open', async () => {
   if (utt1 && !interjected) problems.push('no interject for utterance 1');
   if (finalState === 'COMMITTED' && want === 'COMMITTED') {
     const file = utt1 ? 'messages/outbox/priya.md' : utt2 ? 'calendar.json' : null;
-    if (file && !stat.includes(file)) problems.push(`main diff does not touch ${file}`);
+    if (file && !changed.includes(file)) problems.push(`main diff does not touch ${file}`);
     if (utt1 && interjected && !NO_CORRECT) {
+      if (correctionExpired) problems.push('correction window expired before the driver answered');
       if (!priya.includes('Friday')) problems.push('priya.md lacks Friday');
       if (priya.includes('Thursday')) problems.push('priya.md still has Thursday');
     }
