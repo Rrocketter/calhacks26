@@ -55,9 +55,10 @@ function Callout({ text }: { text: string }) {
 // Dim guess at the rest of the sentence from the belief; each segment re-animates when it changes.
 function Ghost({ belief }: { belief: Belief }) {
   const parts = ghostParts(belief);
-  if (!parts) return null;
+  const o = ghostOpacity(belief.confidence);
+  if (!parts || o === 0) return null;
   return (
-    <span className="ghost" style={{ '--ghost': ghostOpacity(belief.confidence) } as CSSProperties} aria-hidden>
+    <span className="ghost" style={{ '--ghost': o } as CSSProperties} aria-hidden>
       {parts.map((p, i) => {
         // The tag stays glued to the first word so it never ends a line on its own.
         const cut = i === 0 ? p.indexOf(' ') : -1;

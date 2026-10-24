@@ -1,6 +1,7 @@
 import type { Belief } from '@ahead/contracts';
 
-// Below this the guess is noise: the ghost fades out entirely. At the lock line it is fully shown.
+// Below this the guess is noise: the ghost is not shown. At the lock line (the server's
+// SPECULATE_AT, apps/server config) it is fully shown.
 export const GHOST_MIN = 0.3;
 const GHOST_FULL = 0.75;
 
@@ -18,7 +19,8 @@ export function ghostParts(belief: Belief | null): string[] | null {
   const e = belief.entities;
   const known = (field: string) => belief.claims.find((c) => c.field === field)?.known;
   const day = known('day') ?? e.weekday ?? e.day;
-  const time = (known('time') ?? e.time)?.replace(/\b(am|pm)\b/i, (m) => m.toUpperCase());
+  // The server sends "at 2" as a bare "2".
+  const time = (known('time') ?? e.time)?.replace(/\b(am|pm)\b/i, (m) => m.toUpperCase()).replace(/^\d{1,2}$/, 'at $&');
   const when = join(day && cap(day), time);
   const person = known('person') ?? e.person;
   const topic = known('topic') ?? e.topic;
@@ -28,17 +30,18 @@ export function ghostParts(belief: Belief | null): string[] | null {
     case 'draft_message':
       return [person ? `draft to ${person}` : 'draft a message', ...tail('about', join(when, topic))];
     case 'reschedule_event':
-      // Without to_weekday the day said is the meeting's current one, not where it is going.
+      // Without to_weekday the day said is the meeting's current one, not where it is going;
+      // the time said is usually the current one too, so it is left out.
       return [
         join('move', topic ?? 'the meeting', person && `with ${person}`),
-        ...tail('to', e.to_weekday ? join(cap(e.to_weekday), time) : ''),
+        ...tail('to', e.to_weekday ? cap(e.to_weekday) : ''),
       ];
     case 'find_file':
       return [`find ${file ?? topic ?? 'a file'}`, ...tail('from', person ?? '')];
     case 'add_note':
       return [topic ? `note ${topic}` : 'add a note', ...tail('for', when)];
     case 'lookup':
-      return [`look up ${topic ?? person ?? file ?? 'that'}`, ...tail('for', when)];
+      return [topic || person || file ? `look up ${topic ?? person ?? file}` : 'look something up', ...tail('for', when)];
   }
 }
 

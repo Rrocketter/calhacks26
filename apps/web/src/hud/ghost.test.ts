@@ -30,10 +30,14 @@ describe('ghostParts', () => {
 
   it('prefers the resolved weekday and lets a claim correct what was said', () => {
     const b = belief({
-      entities: { person: 'Priya', day: 'thursday', weekday: 'thursday', time: 'at 2' },
+      entities: { person: 'Priya', day: 'thursday', weekday: 'thursday', time: '2' },
       claims: [{ field: 'day', said: 'Thursday', known: 'Friday', docId: 'evt-priya-q3' }],
     });
     expect(ghostParts(b)).toEqual(['draft to Priya', 'about Friday at 2']);
+    const tomorrow = belief({ entities: { day: 'tomorrow', weekday: 'saturday', time: '9 am' } });
+    expect(ghostParts(tomorrow)).toEqual(['draft a message', 'about Saturday 9 AM']);
+    const named = belief({ entities: { person: 'Pria' }, claims: [{ field: 'person', said: 'Pria', known: 'Priya Shah', docId: 'c' }] });
+    expect(ghostParts(named)).toEqual(['draft to Priya Shah']);
   });
 
   it('moves a meeting only to an explicit target day', () => {
@@ -41,7 +45,7 @@ describe('ghostParts', () => {
     expect(ghostParts(belief({ intent: 'reschedule_event', entities: e }))).toEqual(['move the meeting with Priya']);
     expect(ghostParts(belief({ intent: 'reschedule_event', entities: { ...e, to_weekday: 'friday' } }))).toEqual([
       'move the meeting with Priya',
-      'to Friday 3 PM',
+      'to Friday',
     ]);
   });
 
@@ -54,7 +58,7 @@ describe('ghostParts', () => {
       'note budget',
       'for Monday',
     ]);
-    expect(ghostParts(belief({ intent: 'lookup', entities: {} }))).toEqual(['look up that']);
+    expect(ghostParts(belief({ intent: 'lookup', entities: {} }))).toEqual(['look something up']);
   });
 });
 
