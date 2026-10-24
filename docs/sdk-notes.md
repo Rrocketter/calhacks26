@@ -12,6 +12,7 @@ Numbers are measured output from the spike scripts, not estimates. Earlier runs 
 - Droid tools: exact allowlist `Create, Edit, Read, TodoWrite, ToolSearch`. Read/LS bypass the permission handler, so the sandbox is the control.
 - Droid watchdog: abort on any tool outside the allowlist or any path outside the workspace, emit `droid_event` with `denied:true`, `interrupt()` then `close()`. It is detection plus a fast stop, not the control.
 - Droid behavior: a denied call (`Cancel`) ends the turn, and `Off` autonomy removes write tools until `updateSettings({enabledToolIds})`.
+- Droid child env: the SDK spawns the CLI with `{...process.env, ...env}`, so every server secret reaches the child unless removed. Pass `env` with the allowlist `FACTORY_API_KEY, PATH, HOME, TMPDIR, LANG, USER, SHELL` and every other key set to `undefined` (spawn drops undefined values). See `droidChildEnv()` in `apps/server/scripts/spike-droid.ts`.
 
 ## Differences from PLAN.md (as of Lane 0)
 
@@ -138,7 +139,7 @@ Final transcript: `Draft a message to Priya saying, I'll see her Thursday at 2 f
 ### Quirks
 
 - Spoken "two" comes back as "2", and a comma appears after "saying". Do not match on exact strings; normalize before intent matching.
-- Several updates arrive within a few ms of each other (for example +3204, +3219, +3236), so debounce downstream.
+- Bursts of near-identical updates happen (for example +3204, +3219, +3236 ms). Do not debounce at Ink's ~250 ms cadence (PLAN.md section 8): query on every update and skip updates whose text did not change (diff only).
 - The final `turn.update` and `turn.eager_end` arrived in the same millisecond (+5380 ms), and `turn.end` followed 345 ms later. The final update adds a trailing period.
 - `say` writes a WAV that `file` describes only as "RIFF data, WAVE audio", so the spike's parser walks chunks to find `fmt ` and `data`.
 - Errors print as `[ink] error <title> <message>`. Headers and keys are never printed.
@@ -161,7 +162,8 @@ Final transcript: `Draft a message to Priya saying, I'll see her Thursday at 2 f
 - Package: `@factory/droid-sdk@0.10.0` (pinned with `-E`), imported from `@factory/droid-sdk/node`. No postinstall build script, so pnpm did not block anything.
 - `createSession` spawns the local `droid` CLI (`~/.local/bin/droid`, v0.249.0) as `droid exec --input-format stream-jsonrpc --output-format stream-jsonrpc` and passes `FACTORY_API_KEY` from `process.env`.
 - Options used: `cwd: WORKSPACE_DIR`, `modelId: 'claude-haiku-5-5'` (accepted, no fallback needed), `autonomyLevel: AutonomyLevel.Off`, `permissionHandler`, `abortSignal` (180 s watchdog), and a longer `disabledToolIds` list (see Confinement; the Task 9 spike used only Execute, Script, FetchUrl, WebSearch).
-- Script: `pnpm --filter @ahead/server spike:droid` (`apps/server/scripts/spike-droid.ts`).
+- Script: `pnpm --filter @ahead/server spike:droid` (`apps/server/scripts/spike-droid.ts`). It leaves `notes/spike.md` uncommitted in the runtime workspace, so run `pnpm reset:workspace` afterwards.
+- **The child env is merged, not replaced.** In `dist/node.mjs` the spawn env is `{...sanitizeSpawnEnv({...process.env, ...config.env}), ...config.trustedEnv}` (ProcessManager, about line 3378), `sanitizeSpawnEnv` is a no-op (about line 561), and `createTransport` adds `FACTORY_API_KEY` and `FACTORY_UPSTREAM_*` on top of `options.env`. So `env: {PATH, ...}` alone still forwards the Cartesia, Moss and Anthropic keys that `--env-file` loaded. Setting every other key to `undefined` removes it, because `child_process.spawn` skips undefined values (checked with `/usr/bin/env` on Node 20.19.4). `listModels` takes the same `env`. Run 2026-10-23 with the allowlisted env: every verdict line matched the final verification run below, `createSession` 562 to 876 ms.
 
 ### Quirks
 
@@ -244,7 +246,7 @@ The runtime workspace should move outside the repo (and away from `.env`), or th
 
 **Final verification run (Task 10):** policy `home`, sandbox `enabled=true mode=per-command`, allowed tools `Create,Edit,Read,TodoWrite,ToolSearch`. write-inside ok (edit ok), read-inside ok, write-outside denied, all 4 canary reads sandbox-denied (81 bytes, handler-saw=no), watchdog fired on all 4 with interrupt-to-result 9 to 13 ms, canary leaked no, writes-session watchdog fires 0, invalid droid_events 0. `createSession` 501 to 879 ms across the five sessions of this run.
 
-**Lane C rule:** the executor must watch every tool_use event and abort the session if any path resolves outside the workspace, emitting droid_event kind:'tool' denied:true. It must also abort on any tool name outside its allowlist, start Droid with the per-session sandbox settings file (denyRead `$HOME` + repo + the secret dirs above, allowRead the workspace, denyWrite `.git`), and verify `session.settings.sandbox.enabled` and the exact `listTools()` allowed set before the first prompt. After an abort it should `interrupt()`, then `close()`. Lane C should classify denials from structured fields (for example `SandboxViolationType` in the SDK), not from regexes over tool_result text as this spike does. The guard tests in `apps/server/scripts/spike-droid.guard.test.ts` are the TDD seed.
+**Lane C rule:** the executor must watch every tool_use event and abort the session if any path resolves outside the workspace, emitting droid_event kind:'tool' denied:true. It must also abort on any tool name outside its allowlist, start Droid with the per-session sandbox settings file (denyRead `$HOME` + repo + the secret dirs above, allowRead the workspace, denyWrite `.git`), and verify `session.settings.sandbox.enabled` and the exact `listTools()` allowed set before the first prompt. After an abort it should `interrupt()`, then `close()`. It must spawn Droid with the allowlisted child env (see Summary for lanes). Lane C should classify denials from structured fields (for example `SandboxViolationType` in the SDK), not from regexes over tool_result text as this spike does. The guard tests in `apps/server/scripts/spike-droid.guard.test.ts` are the TDD seed.
 
 **Measured verdicts (final code)**
 

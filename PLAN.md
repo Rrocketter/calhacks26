@@ -87,7 +87,7 @@ type Belief = {
 ```
 
 ### Speculation rules
-- One Droid session per turn, at most two prompts (Phase 1 plan, Phase 2 slots). If intent changes after dispatch, abort and discard.
+- The warm Droid session pre-created at LISTENING is bound to the turn at belief lock and gets at most two prompts (Phase 1 plan, Phase 2 slots). If intent changes after dispatch, interrupt and discard.
 - Droid may only touch `~/.ahead/workspace/`. Execute tool disabled. No network.
 - Read/LS bypass the permission handler, so the workspace sits outside the repo, tools are disabled, and a watchdog aborts stray runs (see `docs/sdk-notes.md`, Droid section).
 - Two-phase speculation. Phase 1 at belief lock: warm session gets "open the target file, find the record, plan the edit, wait for details". Phase 2 at `turn.eager_end`: final slot values go in as a second turn of the same session. `turn.resume` un-finalizes, `turn.end` closes the turn. The server forwards `turn_eager_end` and `turn_resume` to the UI as s2c events.
