@@ -16,7 +16,7 @@ export class Speculator {
   ) {}
 
   start(): void {
-    this.track(this.executor.warm(), 'warm');
+    this.track(() => this.executor.warm(), 'warm');
   }
 
   onServerEvent(ev: ServerEvent): void {
@@ -63,12 +63,12 @@ export class Speculator {
     const x = this.executor;
     switch (e.type) {
       case 'phase1':
-        this.track(x.phase1(e.turnId, e.belief), 'phase1', e.turnId, () => undefined, true);
+        this.track(() => x.phase1(e.turnId, e.belief), 'phase1', e.turnId, () => undefined, true);
         break;
       case 'phase2': {
         const seq = ++this.phase2Seq;
         this.track(
-          x.phase2(e.turnId, e.belief),
+          () => x.phase2(e.turnId, e.belief),
           'phase2',
           e.turnId,
           () => {
@@ -80,16 +80,16 @@ export class Speculator {
       }
       case 'reset_phase1':
         this.phase2Seq++; // invalidates any phase2 still in flight
-        this.track(x.resetToPhase1(e.turnId), 'resetToPhase1');
+        this.track(() => x.resetToPhase1(e.turnId), 'resetToPhase1');
         break;
       case 'commit':
-        this.track(x.commit(e.turnId), 'commit', e.turnId, () => undefined, true);
+        this.track(() => x.commit(e.turnId), 'commit', e.turnId, () => undefined, true);
         break;
       case 'rollback':
-        this.track(x.rollback(e.turnId), 'rollback');
+        this.track(() => x.rollback(e.turnId), 'rollback');
         break;
       case 'warm':
-        this.track(x.warm(), 'warm');
+        this.track(() => x.warm(), 'warm');
         break;
       case 'state':
         this.emit({ type: 'state_change', turnId: this.ctx.turnId ?? '', state: e.state });
@@ -101,8 +101,14 @@ export class Speculator {
     return this.ctx.turnId === turnId;
   }
 
-  // Every executor promise gets a catch. `feedsFailure` calls also drive the machine to `failed`.
-  private track(p: Promise<void>, label: string, turnId?: string, onOk: () => void = () => undefined, feedsFailure = false): void {
+  // Every executor promise gets a catch; a synchronous throw becomes a rejection. `feedsFailure` calls also drive the machine to `failed`.
+  private track(call: () => Promise<void>, label: string, turnId?: string, onOk: () => void = () => undefined, feedsFailure = false): void {
+    let p: Promise<void>;
+    try {
+      p = call();
+    } catch (err) {
+      p = Promise.reject(err);
+    }
     const done: Promise<void> = p
       .then(onOk)
       .catch((err: unknown) => {

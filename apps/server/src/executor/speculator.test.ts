@@ -116,17 +116,21 @@ test('other rejection emits error and rolls back', async () => {
   for (const e of s.events) parseServerEvent(JSON.stringify(e));
 });
 
-test('R19: phase2 resolving after reset_phase1 does not stage', async () => {
-  let release: () => void = () => undefined;
-  const s = setup({ phase2: () => new Promise<void>((r) => (release = r)) });
+test('R19: stale first phase2 resolving after a second phase2 does not stage', async () => {
+  const releases: (() => void)[] = [];
+  const s = setup({ phase2: () => new Promise<void>((r) => releases.push(r)) });
   s.spec.onServerEvent(ev('turn_start', 't1'));
   s.spec.onServerEvent(bu('t1', belief('draft_message', 0.8)));
   s.spec.onServerEvent(ev('turn_eager_end', 't1'));
   s.spec.onServerEvent(ev('turn_resume', 't1'));
-  release();
-  await s.spec.idle();
+  s.spec.onServerEvent(ev('turn_eager_end', 't1'));
+  assert.equal(releases.length, 2);
+  releases[0]?.();
+  await new Promise((r) => setImmediate(r));
   assert.ok(!s.states().includes('STAGED'));
-  assert.equal(s.states().at(-1), 'SPECULATING');
+  releases[1]?.();
+  await s.spec.idle();
+  assert.equal(s.states().at(-1), 'STAGED');
 });
 
 test('events for another turnId are ignored', async () => {
@@ -139,6 +143,72 @@ test('events for another turnId are ignored', async () => {
   await s.spec.idle();
   assert.deepEqual(s.names(), []);
   assert.deepEqual(s.states(), ['LISTENING']);
+});
+
+test('late results from a previous turn do not touch the new turn', async () => {
+  let failP1: (e: Error) => void = () => undefined;
+  let finish2: () => void = () => undefined;
+  const calls: string[] = [];
+  const events: ServerEvent[] = [];
+  const executor: Executor = {
+    warm: async () => undefined,
+    phase1: (t) => (t === 't1' ? new Promise<void>((_, rej) => (failP1 = rej)) : Promise.resolve()),
+    phase2: (t) => (t === 't1' ? new Promise<void>((res) => (finish2 = res)) : new Promise<void>(() => undefined)),
+    resetToPhase1: async () => undefined,
+    commit: async (t) => void calls.push(`commit ${t}`),
+    rollback: async (t) => void calls.push(`rollback ${t}`),
+  };
+  const spec = new Speculator(executor, (e) => void events.push(e));
+  spec.onServerEvent(ev('turn_start', 't1'));
+  spec.onServerEvent(bu('t1', belief('draft_message', 0.8)));
+  spec.onServerEvent(ev('turn_eager_end', 't1'));
+  spec.onServerEvent(ev('turn_start', 't2'));
+  spec.onServerEvent(bu('t2', belief('find_file', 0.8))); // t2 is SPECULATING, phase2 not sent
+  calls.length = 0;
+  const before = events.length;
+  failP1(new SpeculationFailed('late'));
+  finish2();
+  await new Promise((r) => setImmediate(r));
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(calls, []);
+  assert.deepEqual(events.slice(before), []);
+});
+
+test('confirm during phase2 commits after it resolves', async () => {
+  let release: () => void = () => undefined;
+  const s = setup({ phase2: () => new Promise<void>((r) => (release = r)) });
+  s.spec.onServerEvent(ev('turn_start', 't1'));
+  s.spec.onServerEvent(bu('t1', belief('draft_message', 0.8)));
+  s.spec.onServerEvent(ev('turn_eager_end', 't1'));
+  s.spec.onConfirm('t1', true);
+  release();
+  await s.spec.idle();
+  assert.deepEqual(s.names(), ['phase1', 'phase2', 'commit', 'warm']);
+  assert.deepEqual(s.states().slice(-2), ['STAGED', 'COMMITTED']);
+});
+
+test('synchronous throw from an executor method is handled and the batch continues', async () => {
+  const calls: string[] = [];
+  const events: ServerEvent[] = [];
+  const executor: Executor = {
+    warm: async () => void calls.push('warm'),
+    phase1: () => { throw new Error('sync boom'); },
+    phase2: async () => undefined,
+    resetToPhase1: async () => undefined,
+    commit: async () => undefined,
+    rollback: async () => undefined,
+  };
+  const spec = new Speculator(executor, (e) => void events.push(e));
+  spec.onServerEvent(ev('turn_start', 't1'));
+  spec.onServerEvent(bu('t1', belief('draft_message', 0.8)));
+  await spec.idle();
+  assert.ok(events.some((e) => e.type === 'error' && e.message.includes('sync boom')));
+  // the state effect after phase1 in the same batch still ran, then failed rolled it back
+  assert.deepEqual(
+    events.flatMap((e) => (e.type === 'state_change' ? [e.state] : [])),
+    ['LISTENING', 'BELIEF_FORMING', 'SPECULATING', 'ROLLED_BACK'],
+  );
+  assert.deepEqual(calls, ['warm']);
 });
 
 test('no unhandled rejections from failing executor methods', async () => {
@@ -156,7 +226,9 @@ test('no unhandled rejections from failing executor methods', async () => {
     spec.onServerEvent(ev('turn_start', 't1'));
     spec.onServerEvent(bu('t1', belief('draft_message', 0.8)));
     spec.onServerEvent(ev('turn_eager_end', 't1'));
-    await spec.idle();
+    // no idle(): allSettled would attach handlers and mask a missing catch
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setTimeout(r, 0));
     await new Promise((r) => setImmediate(r));
     assert.deepEqual(seen, []);
     assert.ok(events.some((e) => e.type === 'error'));
