@@ -40,6 +40,8 @@ export type OrchestratorDeps = {
   speaker: Speaker;
   answerer: Answerer;
   demo: DemoPort | null; // null = live mic
+  /** Forward mic audio even with a demo (DEMO_LIVE_INK diagnostics). Default: only without a demo. */
+  mic?: boolean;
   today?: () => Date;
   correctionTimeoutMs?: number; // default CORRECTION_TIMEOUT_MS
   confirmWindowMs?: number; // default CONFIRM_WINDOW_MS
@@ -221,7 +223,7 @@ export class Orchestrator {
   onClient = (ev: ClientEvent): void => {
     switch (ev.type) {
       case 'audio_chunk':
-        if (!this.d.demo) this.d.voice.handleClient(ev);
+        if (this.d.mic ?? !this.d.demo) this.d.voice.handleClient(ev);
         return;
       case 'confirm_action': {
         // Voice, click and key are equivalent and the first one wins.
@@ -396,7 +398,7 @@ export class Orchestrator {
     const bare = !this.started.has(turnId) && parseConfirm(finalText) !== null;
     if (turnId === this.confirmTurn || bare) {
       // Already acted on at its first partial, or a yes/no with nothing pending: a no-op.
-      if (bare) console.log(`[orchestrator] bare "${finalText}" with nothing pending ignored (${turnId})`);
+      if (bare && turnId !== this.confirmTurn) console.log(`[orchestrator] bare "${finalText}" with nothing pending ignored (${turnId})`);
       if (tracker) this.guard(tracker.onTurnEnd(turnId, finalText), 'tracker turn end');
       return;
     }

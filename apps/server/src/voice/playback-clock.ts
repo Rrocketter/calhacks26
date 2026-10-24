@@ -1,4 +1,5 @@
-export const PLAYBACK_TAIL_MS = 300;
+// Short: the browser mic runs with echoCancellation, and a longer tail ate the start of a quick "yes".
+export const PLAYBACK_TAIL_MS = 100;
 export const STOP_RAMP_MS = 30; // matches PcmPlayer.stopNow()
 
 export interface PlaybackClock {

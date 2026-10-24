@@ -31,6 +31,8 @@ export class VoiceSession {
   /** Mic frames dropped during the current mute window. */
   private droppedFrames = 0;
   private loggedMuteUntil = -Infinity;
+  /** End of the last mute window that dropped mic frames (confirm diagnostics). */
+  private lastMuteEnd = -Infinity;
   /** Turn whose first non-empty partial has been seen (the user is really talking). */
   private speakingTurn: string | null = null;
   private closed = false;
@@ -77,10 +79,12 @@ export class VoiceSession {
     }
     if (this.clock.isMuted(this.now())) {
       this.droppedFrames++; // drop, never send zeros
+      this.lastMuteEnd = this.clock.mutedUntil();
       return;
     }
     if (this.droppedFrames > 0) {
-      console.log(`[voice] dropped ${this.droppedFrames} mic frames`);
+      const late = Math.round(this.now() - this.lastMuteEnd);
+      console.log(`[voice] dropped ${this.droppedFrames} mic frames; first frame forwarded +${late}ms after mute end`);
       this.droppedFrames = 0;
     }
     this.ink.sendPcm(Buffer.from(ev.pcm, 'base64'));
@@ -110,10 +114,15 @@ export class VoiceSession {
       // so barge-in and speculation start on the first non-empty partial instead.
       if (ev.type === 'transcript_partial' && ev.text.trim() !== '' && this.speakingTurn !== ev.turnId) {
         this.speakingTurn = ev.turnId;
+        const sinceMute = Number.isFinite(this.lastMuteEnd) ? `+${Math.round(this.now() - this.lastMuteEnd)}ms after mute end` : 'no mute yet';
+        console.log(`[voice] first update ${ev.turnId} ${sinceMute} "${ev.text}"`);
         this.onUserSpeaking(ev.turnId);
       } else if (ev.type === 'transcript_final') {
         finalText = ev.text.trim();
-      } else if (ev.type === 'turn_end' && finalText !== '') {
+      } else if (ev.type === 'turn_end' && this.speakingTurn !== ev.turnId) {
+        console.log(`[voice] turn.end with no update ${ev.turnId} final="${finalText}"`);
+      }
+      if (ev.type === 'turn_end' && finalText !== '') {
         if (this.onTurnEnd) this.onTurnEnd(ev.turnId, finalText);
         else this.speaker.speak(TURN_END_REPLY, { interrupt: false, turnId: ev.turnId });
       }

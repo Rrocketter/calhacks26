@@ -22,6 +22,8 @@ import { SonicClient } from './voice/sonic-client.js';
 const PORT = Number(process.env.AHEAD_SERVER_PORT ?? 8787);
 const DEMO_MODE = process.env.DEMO_MODE === '1';
 const MOCK_BELIEF = DEMO_MODE && process.env.AHEAD_MOCK_BELIEF === '1';
+// Diagnostics: fixtures drive the utterance, real Ink hears the mic (spoken-confirm trials).
+const LIVE_INK = !DEMO_MODE || process.env.DEMO_LIVE_INK === '1';
 
 const errMessage = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
@@ -81,7 +83,7 @@ async function main(): Promise<void> {
       send: (e) => session.handleTts(e),
       onCancel: (id) => clock.onCancel(id, Date.now()),
     });
-    const inkClient = DEMO_MODE
+    const inkClient = !LIVE_INK
       ? null
       : new InkClient({
           apiKey,
@@ -129,7 +131,7 @@ async function main(): Promise<void> {
         }
       : null;
 
-    const orch = new Orchestrator({ send, voice: session, tracker, speculator, speaker: sonic, answerer, demo });
+    const orch = new Orchestrator({ send, voice: session, tracker, speculator, speaker: sonic, answerer, demo, mic: LIVE_INK });
     let tornDown = false;
     const teardown = (): void => {
       if (tornDown) return;
@@ -178,7 +180,7 @@ async function main(): Promise<void> {
   wss.on('error', onListenError);
 
   http.listen(PORT, 'localhost', () => {
-    const tags = `${DEMO_MODE ? ' DEMO_MODE' : ''}${MOCK_BELIEF ? ' mock belief' : ''}`;
+    const tags = `${DEMO_MODE ? ' DEMO_MODE' : ''}${DEMO_MODE && LIVE_INK ? ' live ink' : ''}${MOCK_BELIEF ? ' mock belief' : ''}`;
     console.log(`[server] listening ws://localhost:${PORT}/ws${tags}`);
   });
 }

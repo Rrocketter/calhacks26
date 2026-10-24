@@ -116,10 +116,10 @@ test('mic is dropped while TTS plays', () => {
   const chunk = ttsChunk('c0', 48000);
   session.handleTts(chunk);
   assert.deepEqual(sent, [chunk]);
-  setNow(1299);
+  setNow(1099);
   session.handleClient(audio(16000));
   assert.equal(pcm.length, 0);
-  setNow(1300);
+  setNow(1100);
   session.handleClient(audio(16000));
   assert.equal(pcm.length, 1);
 });
