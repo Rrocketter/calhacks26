@@ -24,12 +24,12 @@ Do not build features. Stop when all four spikes pass.
 
 ## Lane A: Voice pipeline (`lane/voice`, apps/server + apps/web audio bits)
 
-Goal: mic in, Ink 2 partials out at ≤ 150 ms cadence, turn detection events, Sonic playback with barge-in.
+Goal: mic in, Ink 2 `turn.update` out at ~250 ms cadence (measured), turn events, Sonic playback with barge-in.
 
 Deliverables
 1. Browser: AudioWorklet capturing 16 kHz PCM, chunked over WS as `audio_chunk`. Playback via AudioContext queue with a `stopNow()` that ramps gain to 0 in 30 ms (used for barge-in).
-2. Server: `InkClient` wrapping Cartesia Ink 2 streaming STT. Emits `transcript_partial` on every partial, `transcript_final` + `turn_end` on Ink's native turn detection. Log cadence.
-3. Server: `SonicClient` streaming TTS to `tts_audio_chunk`. Function `speak(text, {interrupt:boolean})`. When `interrupt`, pause forwarding audio to Ink for 1.5 s so the agent does not transcribe itself.
+2. Server: `InkClient` wrapping Cartesia Ink 2 streaming STT. Emits `transcript_partial` on every `turn.update`, and surfaces `turn.eager_end` (finalize trigger), `turn.resume` (un-finalize), `turn.end` (closes the turn; emits `transcript_final` + `turn_end`). Log cadence.
+3. Server: `SonicClient` streaming TTS (WebSocket, `sonic-3.6`) to `tts_audio_chunk`. Function `speak(text, {interrupt:boolean})`. When `interrupt`, pause forwarding audio to Ink for 1.5 s so the agent does not transcribe itself.
 4. A `turnId` lifecycle: new id on first partial after a `turn_end`.
 5. Test against the mock belief tracker: when mock emits `interject`, Sonic speaks over the user and STT resumes cleanly.
 
@@ -45,12 +45,12 @@ Deliverables
 1. `scripts/gen-corpus.ts`: generate 300 to 500 synthetic docs for one fictional user (calendar events, contacts, notes, emails, file summaries) with metadata `{type, date, people[]}`. Must include the demo facts from PLAN.md section 5 verbatim.
 2. `MossIndex`: build index from corpus, load in-process at server start, `query(text, {k, filters})` returning hits + measured ms. Hybrid mode.
 3. `BeliefTracker` (pure logic, TDD this):
-   - `onPartial(turnId, text)`: diff against last partial, query Moss with the new text window (last ~12 tokens) and the full partial, merge into a recency-weighted accumulator per turn.
-   - every 400 ms, if the partial changed, call Claude Haiku with `{partial, topHits}` and a strict JSON schema → `Belief`. Never block the Moss loop on this.
+   - `onUpdate(turnId, text)` (driven by Ink `turn.update`, ~250 ms): normalize text first (Ink writes "two" as "2" and adds punctuation), then 3-4 Moss queries: full text, last ~6 words, one per extracted entity. Merge into a recency-weighted accumulator per turn. ~60 queries per utterance at ~2 ms (measured p50 2.0 ms / p95 2.4 ms).
+   - on every Nth update, if the text changed, call Claude Haiku with `{partial, topHits}` and a strict JSON schema → `Belief`. Never block the Moss loop on this.
    - contradiction detection: when Haiku returns `claims` whose `said` conflicts with the `known` value from a top hit, and confidence ≥ 0.8, emit `interject` once per turn.
    - emits `belief_update` and `moss_hits` after every step.
-   - `onTurnEnd(turnId, finalText)`: one Haiku call to confirm or revise the belief, returns final `Belief`.
-4. Thresholds in one config object: `SPECULATE_AT=0.75`, `INTERJECT_AT=0.8`, `LLM_INTERVAL_MS=400`, `PARTIAL_DEBOUNCE_MS=100`.
+   - `onEagerEnd(turnId, text)` finalizes slots (trigger for Phase 2); `onResume(turnId)` un-finalizes; `onTurnEnd(turnId, finalText)`: one Haiku call to confirm or revise the belief, returns final `Belief`.
+4. Thresholds in one config object: `SPECULATE_AT=0.75`, `INTERJECT_AT=0.8`, `LLM_EVERY_N_UPDATES`, `PARTIAL_DEBOUNCE_MS=100`.
 5. Replay harness: feed a fixture of timed partials from the demo script and print the belief timeline. This is also the DEMO_MODE backbone.
 
 Done when: on the demo fixture, belief locks `draft_message` + `person=Priya` before the word "Thursday" arrives, and the contradiction fires at "Thursday".
@@ -63,11 +63,12 @@ Goal: a `Speculator` that turns a belief into staged, reversible, visible work v
 
 Deliverables
 1. `DroidExecutor` using `@factory/droid-sdk`:
-   - `prepare(turnId)`: `git checkout -b spec/<turnId>` inside `~/.ahead/workspace/`, create a Droid session with `cwd=~/.ahead/workspace/`.
-   - `speculate(turnId, belief)`: build a prompt from an action template (`reschedule_event`, `draft_message`, `add_note`, `find_file`) and run it. Stream every SDK event (plan text, tool use, tool result) to the WS as `droid_event`. After completion, compute `git diff main..spec/<turnId>` and emit as `droid_event kind:'diff'`.
+   - `prepare(turnId)`: `git checkout -b spec/<turnId>` inside `~/.ahead/workspace/`, create a Droid session with `cwd=~/.ahead/workspace/`. Call it at LISTENING so the session is warm (create 0.9 s warm / 2.2 s cold).
+   - `speculate(turnId, belief)`, two phases in the same session. Phase 1 at belief lock: "open the target file, find the record, plan the edit, wait for details". Phase 2 at `turn.eager_end`: send the final slot values as a second turn. Build prompts from an action template (`reschedule_event`, `draft_message`, `add_note`, `find_file`). Stream every SDK event (plan text, tool use, tool result) to the WS as `droid_event`. After completion, compute `git diff main..spec/<turnId>` and emit as `droid_event kind:'diff'`.
    - Permission handler: allow read/write/edit only for paths under `~/.ahead/workspace/`; deny Execute, network, and anything else. Deny must be logged and surfaced to UI as a `droid_event kind:'tool'` with `denied:true` so judges see the safety layer working.
    - `commit(turnId)`: fast-forward merge to main, emit `state_change COMMITTED`.
    - `rollback(turnId)`: `session.abort()`, checkout main, delete branch, emit `state_change ROLLED_BACK`.
+   - Confinement: Read/LS bypass the permission handler, so the workspace is `~/.ahead/workspace`, tools are disabled, and a watchdog aborts the run (see `docs/sdk-notes.md`, Droid section).
    - Hard rule: at most one live speculation per turn. A new `speculate` for the same turn must rollback first.
 2. `StateMachine` (TDD): LISTENING → BELIEF_FORMING → SPECULATING → STAGED → COMMITTED | ROLLED_BACK, with the transitions driven by belief confidence and turn events. Emits `state_change`.
 3. Action templates in `apps/server/src/actions/*.md`. Each is explicit about which file to edit and must end with "Do not run commands. Do not touch files outside this workspace."

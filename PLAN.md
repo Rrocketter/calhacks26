@@ -11,7 +11,7 @@ Every voice assistant waits for you to stop talking, then thinks. AHEAD retrieve
 
 ## 2. Why this can win
 
-- The core trick (retrieval on every partial, 20 to 50 queries per sentence) is only possible because Moss runs in-process at sub-10 ms. A cloud vector DB at 200 to 500 ms cannot do this. That is the "impossible made possible" hook sponsors asked for.
+- The core trick (retrieval on every Ink update, ~60 queries per utterance at ~2 ms, measured p50 2.0 ms / p95 2.4 ms) is only possible because Moss runs in-process at sub-10 ms. A cloud vector DB at 200 to 500 ms cannot do this. That is the "impossible made possible" hook sponsors asked for.
 - Voice is the entire interface, not a feature. Cartesia's turn detection literally decides when speculation becomes commitment.
 - Droid does real work on a trigger (belief confidence threshold), with scoped permissions, visible plan/steps/diffs, and rollback. That is Factory's rubric nearly verbatim.
 - Speculative execution with cancellation and rollback is a real systems problem. Solo plus technically complex is a credible pairing.
@@ -24,32 +24,36 @@ Every voice assistant waits for you to stop talking, then thinks. AHEAD retrieve
 | Best Solo Hack | Team of 1 on Devpost, live demo, full judging window | Yes by construction |
 | Moss | Moss used meaningfully; voice agent / personal agent that remembers you | Moss is queried on every partial transcript. Latency HUD shows per-query ms. Project collapses without it. |
 | Moss Social Post | Post with engagement | Post a 20 to 30 s clip of the interjection moment with the latency HUD visible, tag @usemoss |
-| Cartesia | Voice core to product, 2-min demo-first pitch, README with setup + features used + limitations, no keys in repo, accessibility/privacy/responsible-use addressed | Ink 2 streaming STT + turn detection, Sonic 3.5 TTS with barge-in. README sections written. Privacy: corpus is local, nothing leaves except STT/TTS audio. |
+| Cartesia | Voice core to product, 2-min demo-first pitch, README with setup + features used + limitations, no keys in repo, accessibility/privacy/responsible-use addressed | Ink 2 streaming STT + turn detection, Sonic 3.6 WebSocket streaming TTS with barge-in. README sections written. Privacy: corpus is local, nothing leaves except STT/TTS audio. |
 | Factory Droid SDK | Droid does real work in the running product, runs on a designed trigger, scoped permissions with safety, visible plans/steps/diffs/results, README explains where Droid is used, no chatbot wrapper, no slides-only demo | Droid dispatched when belief confidence crosses threshold. Permission handler allows writes only under `~/.ahead/workspace/`, denies Execute and network. All Droid tool events stream to the UI. Staged work lives on a git branch and is committed or discarded. |
 | Most Technically Complex (stretch) | Judges see real engineering | Speculation + cancellation + rollback + sub-100 ms loop |
 
 ## 4. How it works (system design)
 
 ```
-Mic ──► Cartesia Ink 2 (streaming STT, partials + turn events)
-            │ partial every ~100 ms
+Mic ──► Cartesia Ink 2 (streaming STT, turn events)
+            │ turn.update ~250 ms (cumulative transcript, numbers normalized)
             ▼
       Belief Tracker (server, TS)
-            │  ├─ Moss hybrid query on each partial (sub-10 ms, in-process)
+            │  ├─ Moss hybrid query, 3-4 per update (full text, last ~6 words, one per entity), ~2 ms each, in-process
             │  ├─ recency-weighted hit accumulator
-            │  └─ Haiku structured call every ~400 ms → {intent, entities, claims, confidence}
+            │  └─ Haiku structured call on every Nth update, never blocking Moss → {intent, entities, claims, confidence}
             │
             ├─ contradiction? (claim vs retrieved fact, conf ≥ 0.8) ──► INTERJECT via Sonic (barge-in)
             │
-            └─ confidence ≥ 0.75 and intent ∈ ACTIONS ──► SPECULATE
+            └─ belief lock: confidence ≥ 0.75 and intent ∈ ACTIONS ──► PHASE 1
                                                               │
                                                               ▼
-                                                    Droid session (Factory SDK)
+                                                    Droid session (Factory SDK), pre-created warm at LISTENING
                                                     cwd = ~/.ahead/workspace/ on branch spec/<id>
+                                                    Phase 1 prompt: open target file, find the record,
+                                                    plan the edit, wait for details
                                                     permission handler: fs under ~/.ahead/workspace/ only
                                                     events → UI (plan, steps, diffs)
                                                               │
-   Ink turn_end ──► Finalize: confirm belief against final transcript (1 Haiku call)
+   Ink turn.eager_end ──► PHASE 2: final slot values sent as a second turn in the same session
+   Ink turn.resume    ──► un-finalize (back to listening, Phase 2 result discarded)
+   Ink turn.end       ──► Close turn: confirm belief against final transcript (1 Haiku call)
                       ├─ match   → Sonic speaks result instantly, asks "apply?"
                       │             user "yes" → merge branch (COMMIT)
                       └─ diverge → abort Droid, delete branch (ROLLBACK), run fresh
@@ -57,7 +61,7 @@ Mic ──► Cartesia Ink 2 (streaming STT, partials + turn events)
 
 ### Components
 - `apps/web` Vite + React. Mic capture, audio playback, HUD. Talks to server over one WebSocket.
-- `apps/server` Node + TS. Holds Moss runtime, belief tracker, Droid executor, Cartesia proxies. Single process.
+- `apps/server` Node + TS. Holds Moss runtime, belief tracker, Droid executor, Cartesia proxies. Single process. Sonic goes over the WebSocket API with `sonic-3.6`; `/tts/bytes` is spike only. Ink rewrites numbers ("two" becomes "2") and adds punctuation, so contradiction and entity matching normalize text first.
 - `packages/contracts` Shared TS types and the WebSocket event schema. Written FIRST. Every lane codes against it with mocks.
 - `workspace-seed/` Tracked seed files that stand in for "your life": `calendar.json`, `contacts.json`, `notes/*.md`, `messages/outbox/*.md`, `files/*`.
 - `~/.ahead/workspace/` (override `AHEAD_WORKSPACE`) Runtime copy of the seed, outside the repo, with its own `git init`, created by `pnpm reset:workspace`. Droid edits these. Diffs are real and visible. Never nest a git repo inside the main repo.
@@ -85,6 +89,8 @@ type Belief = {
 ### Speculation rules
 - Fire Droid at most once per turn. If belief intent changes after dispatch, abort and discard.
 - Droid may only touch `~/.ahead/workspace/`. Execute tool disabled. No network.
+- Read/LS bypass the permission handler, so the workspace sits outside the repo, tools are disabled, and a watchdog aborts stray runs (see `docs/sdk-notes.md`, Droid section).
+- Two-phase speculation. Phase 1 at belief lock: warm session gets "open the target file, find the record, plan the edit, wait for details". Phase 2 at `turn.eager_end`: final slot values go in as a second turn of the same session. `turn.resume` un-finalizes, `turn.end` closes the turn.
 - Every speculation runs on branch `spec/<turnId>`. COMMIT = fast-forward merge to main. ROLLBACK = branch delete.
 - Visible state machine in UI: LISTENING → BELIEF_FORMING → SPECULATING → STAGED → (COMMITTED | ROLLED_BACK)
 
@@ -132,7 +138,7 @@ Corpus facts to seed: meeting with Priya is Friday 2 PM. Project file "q3-deck.p
 
 ## 8. Risks and mitigations
 - Ink partial rate too slow or bursty → debounce to 100 ms, query on diff only.
-- Haiku belief call too slow → run every 400 ms, never block Moss loop; Moss hits alone can drive speculation for simple intents.
+- Haiku belief call too slow → run on every Nth `turn.update`, never block Moss loop; Moss hits alone can drive speculation for simple intents.
 - Droid startup latency (spawns CLI) → keep one warm session per turn, pre-create at LISTENING.
 - Barge-in audio clipping → use AudioContext with gain ramp, stop STT ingest during TTS.
 - Any sponsor API down at judging → DEMO_MODE fixture replay.
