@@ -54,6 +54,7 @@ wss.on('connection', (ws) => {
   });
   ws.on('close', () => {
     console.log('[voice] client disconnected');
+    session.close();
     ink.close();
     sonic.close();
   });

@@ -28,8 +28,11 @@ export class VoiceSession {
   private badRateReported = false;
   private interjectedTurn: string | null = null;
   /** Mic frames dropped during the current mute window. */
-  droppedFrames = 0;
+  private droppedFrames = 0;
   private loggedMuteUntil = -Infinity;
+  /** Turn whose first non-empty partial has been seen (the user is really talking). */
+  private speakingTurn: string | null = null;
+  private closed = false;
 
   constructor(deps: {
     send: (e: ServerEvent) => void;
@@ -49,7 +52,13 @@ export class VoiceSession {
     this.mockSpeed = deps.mockSpeed ?? 1;
   }
 
+  /** Stop reacting to anything; called when the browser socket closes. */
+  close(): void {
+    this.closed = true;
+  }
+
   handleClient(ev: ClientEvent): void {
+    if (this.closed) return;
     if (ev.type !== 'audio_chunk') return;
     if (ev.sampleRate !== 16000) {
       if (!this.badRateReported) {
@@ -74,6 +83,7 @@ export class VoiceSession {
   }
 
   handleTts(ev: ServerEvent): void {
+    if (this.closed) return;
     if (ev.type === 'tts_audio_chunk') {
       const now = this.now();
       this.clock.onChunk(ev.contextId, Buffer.byteLength(ev.pcm, 'base64'), ev.sampleRate, now);
@@ -88,24 +98,36 @@ export class VoiceSession {
   }
 
   handleInk(msg: InkMessage): void {
+    if (this.closed) return;
+    let finalText = '';
     for (const ev of this.tracker.handle(msg, this.now())) {
       this.send(ev);
-      if (ev.type === 'turn_start') {
-        const cancelled = this.speaker.cancelActive();
-        if (cancelled !== null) this.clock.onCancel(cancelled, this.now());
-        if (this.mockBelief) {
-          this.runMockBelief(ev.turnId).catch((err: unknown) => {
-            console.error(`[voice] mock belief error ${String(err)}`);
-            this.send({ type: 'error', message: String(err), source: 'voice' });
-          });
-        }
-      } else if (ev.type === 'turn_end') {
+      // A bare turn.start can be a phantom (Ink re-opens a turn right after a timeout turn.end),
+      // so barge-in and speculation start on the first non-empty partial instead.
+      if (ev.type === 'transcript_partial' && ev.text.trim() !== '' && this.speakingTurn !== ev.turnId) {
+        this.speakingTurn = ev.turnId;
+        this.onUserSpeaking(ev.turnId);
+      } else if (ev.type === 'transcript_final') {
+        finalText = ev.text.trim();
+      } else if (ev.type === 'turn_end' && finalText !== '') {
         this.speaker.speak(TURN_END_REPLY, { interrupt: false, turnId: ev.turnId });
       }
     }
   }
 
+  private onUserSpeaking(turnId: string): void {
+    const cancelled = this.speaker.cancelActive();
+    if (cancelled !== null) this.clock.onCancel(cancelled, this.now());
+    if (this.mockBelief) {
+      this.runMockBelief(turnId).catch((err: unknown) => {
+        console.error(`[voice] mock belief error ${String(err)}`);
+        this.send({ type: 'error', message: String(err), source: 'voice' });
+      });
+    }
+  }
+
   handleInterject(turnId: string, text: string): void {
+    if (this.closed) return;
     if (turnId !== this.tracker.turnId) return;
     if (this.interjectedTurn === turnId) return;
     this.interjectedTurn = turnId;
@@ -115,7 +137,7 @@ export class VoiceSession {
 
   private async runMockBelief(turnId: string): Promise<void> {
     for await (const ev of mockBeliefStream(turnId, { speed: this.mockSpeed })) {
-      if (this.tracker.turnId !== turnId) return;
+      if (this.closed || this.tracker.turnId !== turnId) return;
       if (ev.type === 'interject') this.handleInterject(turnId, ev.text);
       else this.send(ev);
     }

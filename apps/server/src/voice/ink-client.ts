@@ -6,6 +6,7 @@ import type { InkMessage } from './turns.js';
 const URL =
   'wss://api.cartesia.ai/stt/turns/websocket?model=ink-2&encoding=pcm_s16le&sample_rate=16000&cartesia_version=2026-08-14';
 const MAX_QUEUED_FRAMES = 50; // ~5 s of 100 ms frames while (re)connecting
+const MIN_CONNECT_INTERVAL_MS = 1000; // no reconnect storms when Cartesia is down
 
 export class InkClient implements InkSink {
   private readonly apiKey: string;
@@ -16,6 +17,8 @@ export class InkClient implements InkSink {
   private readonly queue: Buffer[] = [];
   private lastUpdateAt = 0;
   private closed = false;
+  private lastAttemptAt = -Infinity;
+  private errorReported = false; // one error event per failure streak
 
   constructor(opts: { apiKey: string; onMessage: (m: InkMessage) => void; onError: (msg: string) => void }) {
     this.apiKey = opts.apiKey;
@@ -24,24 +27,31 @@ export class InkClient implements InkSink {
   }
 
   connect(): Promise<void> {
-    this.closed = false;
+    if (this.closed) return Promise.resolve();
     if (this.ws?.readyState === WebSocket.OPEN) return Promise.resolve();
     if (this.opening) return this.opening;
     const t0 = performance.now();
+    if (t0 - this.lastAttemptAt < MIN_CONNECT_INTERVAL_MS) return Promise.resolve();
+    this.lastAttemptAt = t0;
     const ws = new WebSocket(URL, { headers: { 'X-API-Key': this.apiKey } });
     this.ws = ws;
     this.opening = new Promise<void>((resolve) => {
       ws.on('open', () => {
         logLatency('ink', 'connect', performance.now() - t0);
         this.opening = null;
+        this.errorReported = false;
         for (const f of this.queue.splice(0)) ws.send(f);
         resolve();
       });
       ws.on('error', (err) => {
-        console.error(`[ink] error ${err.message}`);
-        this.onError(err.message);
-        this.opening = null;
         resolve(); // close follows; next sendPcm reconnects
+        if (this.ws !== ws) return;
+        console.error(`[ink] error ${err.message}`);
+        this.opening = null;
+        if (!this.errorReported) {
+          this.errorReported = true;
+          this.onError(err.message);
+        }
       });
       ws.on('close', (code) => {
         if (this.ws !== ws) return;
@@ -77,6 +87,7 @@ export class InkClient implements InkSink {
   }
 
   private handle(raw: string): void {
+    if (this.closed) return;
     let m: InkMessage;
     try {
       m = JSON.parse(raw) as InkMessage;

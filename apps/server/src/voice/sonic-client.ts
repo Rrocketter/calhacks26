@@ -26,6 +26,7 @@ export class SonicClient implements Speaker {
   private opening: Promise<void> | null = null;
   private active: ActiveContext | null = null;
   private readonly queue: string[] = [];
+  private closed = false;
 
   constructor(opts: {
     apiKey: string;
@@ -38,6 +39,7 @@ export class SonicClient implements Speaker {
   }
 
   connect(): Promise<void> {
+    if (this.closed) return Promise.resolve();
     if (this.ws?.readyState === WebSocket.OPEN) return Promise.resolve();
     if (this.opening) return this.opening;
     const t0 = performance.now();
@@ -72,6 +74,7 @@ export class SonicClient implements Speaker {
 
   speak(text: string, opts: { interrupt: boolean; turnId: string }): string {
     const startedAt = performance.now();
+    if (this.closed) return randomUUID(); // disposed: never reconnect
     if (opts.interrupt || this.active) this.cancelActive();
     const contextId = randomUUID();
     this.active = { contextId, turnId: opts.turnId, startedAt, gotFirst: false };
@@ -98,6 +101,7 @@ export class SonicClient implements Speaker {
   }
 
   close(): void {
+    this.closed = true;
     this.active = null;
     this.queue.length = 0;
     this.ws?.close();
@@ -106,6 +110,7 @@ export class SonicClient implements Speaker {
   }
 
   private write(msg: string, queueIfClosed = true): void {
+    if (this.closed) return;
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(msg);
       return;

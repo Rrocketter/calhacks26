@@ -194,10 +194,10 @@ Run: `pnpm --filter @ahead/server dev` (background), then `pnpm --filter @ahead/
 - `--twice` must wait out the reply before sending again. Sending right after `done` drops the first ~2 s of turn 2 (mic muted while the 1.6 s reply plays + 300 ms tail, `[voice] dropped 20 mic frames`).
 - Mute window seen: turn-end reply `mute until` +1615 to +1909 ms after its `done`; the mock interjection +5580 / +5929 ms (dropped 60 / 64 mic frames).
 
-**Mock belief run (`AHEAD_MOCK_BELIEF=1`, 2 runs, same result):**
-- `interject` at +2.85 s, first interjection chunk 76 to 78 ms later. The mic is muted for the rest of the fixture, so the final transcript stops at "Draft a message to Priya saying, I'll see her Thursday at".
-- Ink holds the last words until zeros reach it after the mute (+9.5 s), then `turn.end` arrives 5.6 s after the last partial. That is Ink's `end_timeout_ms` (default 5600 ms, query param `turn_end_timeout_ms`, range 640 to 11200): the cut-off sentence never drops the turn likelihood below `end_threshold`, so the timeout ends it.
-- Not in the docs: right after a timeout `turn.end`, Ink sent `turn.start` again 8 ms later, with only zeros flowing and no `turn.update` after it. That phantom turn makes `VoiceSession` cancel the turn-end reply before its first chunk and restart the mock belief stream (a second interjection at +18.5 s). It is still open when the smoke stops at 20 s.
+**Mock belief run (`AHEAD_MOCK_BELIEF=1`, `smoke:voice -- --mock`):**
+- Ink finding (before the fix, 2/2 runs): when the interjection mute cut the user off mid-sentence ("...Thursday at"), `turn.end` came 5.6 s after the last partial. That is Ink's `end_timeout_ms` (default 5600 ms, query param `turn_end_timeout_ms`, range 640 to 11200): the cut-off sentence never drops the turn likelihood below `end_threshold`. Then, not in the docs, Ink sent `turn.start` again 8 ms later with only zeros flowing and no `turn.update` after it. The phantom turn cancelled the turn-end reply before its first chunk and restarted the mock stream (a second interjection).
+- Fix: `VoiceSession` ignores a bare `turn.start`. Barge-in (cancel the active reply) and the mock stream start on the first non-empty `transcript_partial`, and `TURN_END_REPLY` is spoken only when `transcript_final` is non-empty. Treat `turn.start` as a hint, never as proof the user is talking.
+- After the fix (1 run): mock stream starts at the first partial (+1.35 s), `interject` at +3.86 s (one only), first interjection chunk 80.3 ms later. Mute until +5343 ms, 58 mic frames dropped. Final transcript stops at "...Thursday at 2 for the Q3" (the starting point moved 1 s later, so more audio got through). This time Ink ended the turn normally, 785 ms after `turn.eager_end`, so the timeout path did not run. Reply TTFA 79.5 ms server, 81 ms client, `done:true`.
 
 ## Factory Droid SDK
 

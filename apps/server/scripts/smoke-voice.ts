@@ -1,6 +1,7 @@
 // Headless end-to-end check of the /ws server: streams the fixture WAV as a live mic would and
 // reports turn events, partial cadence and time-to-first-audio. Start the server first
-// (`pnpm --filter @ahead/server dev`). `--twice` sends the WAV a second time on the same socket.
+// (`pnpm --filter @ahead/server dev`). `--twice` sends the WAV a second time on the same socket;
+// `--mock` (server on AHEAD_MOCK_BELIEF=1) skips the reply-done exit check.
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,6 +13,7 @@ const FRAME_MS = 100;
 const TURN_TIMEOUT_MS = 20000;
 const PORT = Number(process.env.PORT ?? 8787);
 const TWICE = process.argv.includes('--twice');
+const MOCK = process.argv.includes('--mock'); // pass when the server runs with AHEAD_MOCK_BELIEF=1
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const wavPath = path.join(here, 'fixtures', 'demo-utterance-1.wav');
@@ -226,6 +228,7 @@ function summary(): boolean {
     console.log(`server metric ttfa: ${r.serverTtfa === null ? 'none' : `${r.serverTtfa.toFixed(1)}ms`}`);
     console.log(`audio chunks: ${r.audioChunks}, reply done: ${r.done}`);
     if (r.final === null || r.audioChunks === 0) ok = false;
+    if (!MOCK && !r.done) ok = false;
   });
   return ok;
 }

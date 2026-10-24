@@ -130,13 +130,76 @@ test('one interjection per turn', () => {
   assert.equal(sent.filter((e) => e.type === 'interject').length, 1);
 });
 
-test('new turn cancels the active reply', () => {
+test('new turn cancels the active reply on its first non-empty partial', () => {
   const { session, cancels } = setup();
   session.handleInk({ type: 'turn.start' });
+  session.handleInk({ type: 'turn.update', transcript: 'a' });
   session.handleInk({ type: 'turn.end', transcript: 'a' });
   const before = cancels.length;
   session.handleInk({ type: 'turn.start' });
+  assert.equal(cancels.length, before);
+  session.handleInk({ type: 'turn.update', transcript: 'b' });
   assert.equal(cancels.length, before + 1);
+});
+
+test('a bare turn.start does not cancel or start mock belief', async () => {
+  const { session, sent, cancels } = setup({ mockBelief: true, mockSpeed: 50, useRealClock: true });
+  session.handleInk({ type: 'turn.start' });
+  assert.equal(cancels.length, 0);
+  await new Promise((r) => setTimeout(r, 100));
+  assert.deepEqual(
+    sent.map((e) => e.type),
+    ['turn_start'],
+  );
+});
+
+test('only the first non-empty partial cancels', () => {
+  const { session, cancels } = setup();
+  session.handleInk({ type: 'turn.start' });
+  session.handleInk({ type: 'turn.update', transcript: '  ' });
+  assert.equal(cancels.length, 0);
+  session.handleInk({ type: 'turn.update', transcript: 'hi' });
+  session.handleInk({ type: 'turn.update', transcript: 'hi there' });
+  assert.equal(cancels.length, 1);
+});
+
+test('turn that ends with an empty transcript does not speak', () => {
+  const { session, sent, speaks } = setup();
+  session.handleInk({ type: 'turn.start' });
+  session.handleInk({ type: 'turn.end', transcript: ' ' });
+  assert.equal(speaks.length, 0);
+  assert.deepEqual(
+    sent.map((e) => e.type),
+    ['turn_start', 'transcript_final', 'turn_end'],
+  );
+});
+
+test('closed session ignores Ink, client, interject and TTS events', () => {
+  const { session, sent, speaks, pcm } = setup();
+  session.handleInk({ type: 'turn.start' });
+  session.handleInk({ type: 'turn.update', transcript: 'hi' });
+  const id = startedTurnId(sent);
+  const before = sent.length;
+  session.close();
+  session.handleInk({ type: 'turn.end', transcript: 'hi' });
+  session.handleInterject(id, 'x');
+  session.handleClient(audio(16000));
+  session.handleTts(ttsChunk('c0', 4800));
+  assert.equal(speaks.length, 0);
+  assert.equal(pcm.length, 0);
+  assert.equal(sent.length, before);
+});
+
+test('close stops the mock belief loop', async () => {
+  const { session, sent, speaks } = setup({ mockBelief: true, mockSpeed: 5, useRealClock: true });
+  session.handleInk({ type: 'turn.start' });
+  session.handleInk({ type: 'turn.update', transcript: 'Draft a' });
+  await waitFor(() => sent.some((e) => e.type === 'moss_hits'));
+  session.close();
+  const before = sent.length;
+  await new Promise((r) => setTimeout(r, 900)); // mock reaches the interjection at ~500 ms at speed 5
+  assert.equal(sent.length, before);
+  assert.equal(speaks.length, 0);
 });
 
 async function waitFor(cond: () => boolean, timeoutMs = 2000): Promise<void> {
@@ -147,6 +210,7 @@ async function waitFor(cond: () => boolean, timeoutMs = 2000): Promise<void> {
 test('mock belief drives the interject path', async () => {
   const { session, sent, speaks } = setup({ mockBelief: true, mockSpeed: 50, useRealClock: true });
   session.handleInk({ type: 'turn.start' });
+  session.handleInk({ type: 'turn.update', transcript: 'Draft a' });
   await waitFor(() => sent.some((e) => e.type === 'interject'));
   assert.ok(sent.some((e) => e.type === 'moss_hits'));
   assert.ok(sent.some((e) => e.type === 'belief_update'));
@@ -177,6 +241,7 @@ test('mock belief errors are reported, not thrown', async () => {
   console.error = () => {};
   try {
     session.handleInk({ type: 'turn.start' });
+    session.handleInk({ type: 'turn.update', transcript: 'Draft a' });
     await waitFor(() => sent.some((e) => e.type === 'error'));
     await new Promise((r) => setTimeout(r, 20));
   } finally {
