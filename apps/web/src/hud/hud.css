@@ -578,6 +578,10 @@ mark {
 
 .row .reason {
   font-size: 16px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .tag.bad {

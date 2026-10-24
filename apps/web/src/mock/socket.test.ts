@@ -47,6 +47,11 @@ describe('MockSocket', () => {
     expect(evs).toContainEqual({ type: 'metric', source: 'sonic', label: 'ttfa', ms: 180 });
   });
 
+  it('auto-confirms by default when autoConfirmMs is omitted', async () => {
+    const evs = await replay({ speed: 50 });
+    expect(states(evs).at(-1)).toBe('COMMITTED');
+  });
+
   it('holds the interject until the transcript shows its trigger word', async () => {
     const evs = await replay({ ...FAST, beliefOffsetMs: 0 });
     const inter = idx(evs, (e) => e.type === 'interject');

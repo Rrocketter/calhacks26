@@ -89,7 +89,8 @@ export class MockSocket implements Transport {
     };
 
     const maybeAutoConfirm = () => {
-      const ms = this.opts.autoConfirmMs ?? null;
+      // Default 1500 ms stands in for the spoken "yes"; an explicit null disables it.
+      const ms = this.opts.autoConfirmMs === undefined ? 1500 : this.opts.autoConfirmMs;
       if (ms === null || autoConfirm || !turnEnded || !this.staged) return;
       autoConfirm = this.sleep(ms).then(() => this.finish(run, turnId, true));
     };

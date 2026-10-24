@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { parseUnifiedDiff, type DiffLine } from './diff';
 import type { DroidResult } from './state';
 
@@ -15,10 +15,20 @@ function indentOf(lines: Body[]): number {
 export function DiffView({ diffs, result }: { diffs: { file: string; diff: string }[]; result: DroidResult | null }) {
   const box = useRef<HTMLDivElement>(null);
   const [clipped, setClipped] = useState(false);
-  useLayoutEffect(() => {
+  const measure = () => {
     const el = box.current;
     if (el) setClipped(el.scrollHeight > el.clientHeight + 1);
-  });
+  };
+  useLayoutEffect(measure);
+  useEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      setClipped(el.scrollHeight > el.clientHeight + 1);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
   const stale = result?.failed === true;
   return (
     <div ref={box} className={['diffs', stale && 'stale', clipped && 'clipped'].filter(Boolean).join(' ')}>

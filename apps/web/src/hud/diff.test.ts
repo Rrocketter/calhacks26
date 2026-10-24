@@ -50,4 +50,74 @@ describe('parseUnifiedDiff', () => {
     expect(parseUnifiedDiff(DIFF.replace(/\n$/, ''))).toEqual(lines);
     expect(lines).toHaveLength(15);
   });
+
+  const body = (d: string) =>
+    parseUnifiedDiff(d).flatMap((l) => ('oldNo' in l ? [[l.kind, l.oldNo, l.newNo, l.text]] : []));
+
+  it('restarts numbering at each hunk header', () => {
+    const d = 'diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1,2 +1,2 @@\n a\n-b\n+B\n@@ -10,1 +10,2 @@\n j\n+k\n';
+    expect(body(d)).toEqual([
+      ['ctx', 1, 1, 'a'],
+      ['del', 2, null, 'b'],
+      ['add', null, 2, 'B'],
+      ['ctx', 10, 10, 'j'],
+      ['add', null, 11, 'k'],
+    ]);
+  });
+
+  it('treats a second file header as meta', () => {
+    const d =
+      'diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-x\n+X\n' +
+      'diff --git a/y b/y\nindex 1..2 100644\n--- a/y\n+++ b/y\n@@ -5 +5 @@\n-y\n+Y\n';
+    const lines = parseUnifiedDiff(d);
+    expect(lines.filter((l) => l.kind === 'meta')).toHaveLength(7);
+    expect(body(d)).toEqual([
+      ['del', 1, null, 'x'],
+      ['add', null, 1, 'X'],
+      ['del', 5, null, 'y'],
+      ['add', null, 5, 'Y'],
+    ]);
+  });
+
+  it('ends the hunk at a headerless ---/+++ pair', () => {
+    const d = '--- a/x\n+++ b/x\n@@ -1 +1 @@\n-x\n+X\n--- a/y\n+++ b/y\n@@ -3 +3 @@\n-y\n+Y\n';
+    expect(parseUnifiedDiff(d).filter((l) => l.kind === 'meta').map((l) => l.text)).toEqual([
+      '--- a/x',
+      '+++ b/x',
+      '--- a/y',
+      '+++ b/y',
+    ]);
+    expect(body(d)).toEqual([
+      ['del', 1, null, 'x'],
+      ['add', null, 1, 'X'],
+      ['del', 3, null, 'y'],
+      ['add', null, 3, 'Y'],
+    ]);
+  });
+
+  it('keeps "\\ No newline at end of file" as meta without advancing numbers', () => {
+    const d = '--- a/f\n+++ b/f\n@@ -1 +1,2 @@\n-a\n\\ No newline at end of file\n+a\n+b\n';
+    const lines = parseUnifiedDiff(d);
+    expect(lines).toContainEqual({ kind: 'meta', text: '\\ No newline at end of file' });
+    expect(body(d)).toEqual([
+      ['del', 1, null, 'a'],
+      ['add', null, 1, 'a'],
+      ['add', null, 2, 'b'],
+    ]);
+  });
+
+  it('numbers a new file from 1', () => {
+    const d = 'diff --git a/n b/n\nnew file mode 100644\n--- /dev/null\n+++ b/n\n@@ -0,0 +1,2 @@\n+one\n+two\n';
+    expect(body(d)).toEqual([
+      ['add', null, 1, 'one'],
+      ['add', null, 2, 'two'],
+    ]);
+  });
+
+  it('accepts count-less hunk headers', () => {
+    expect(body('--- a/f\n+++ b/f\n@@ -1 +1 @@\n-a\n+b\n')).toEqual([
+      ['del', 1, null, 'a'],
+      ['add', null, 1, 'b'],
+    ]);
+  });
 });
