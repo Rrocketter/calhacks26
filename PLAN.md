@@ -52,7 +52,7 @@ Mic ──► Cartesia Ink 2 (streaming STT, turn events)
                                                     events → UI (plan, steps, diffs)
                                                               │
    Ink turn.eager_end ──► PHASE 2: final slot values sent as a second turn in the same session
-   Ink turn.resume    ──► un-finalize (back to listening, Phase 2 result discarded)
+   Ink turn.resume    ──► un-finalize (back to listening, Phase 2 interrupted, branch reset to post-Phase-1)
    Ink turn.end       ──► Close turn: confirm belief against final transcript (1 Haiku call)
                       ├─ match   → Sonic speaks result instantly, asks "apply?"
                       │             user "yes" → merge branch (COMMIT)
@@ -141,7 +141,7 @@ Corpus facts to seed: meeting with Priya is Friday 2 PM. Project file "q3-deck.p
 ## 8. Risks and mitigations
 - Ink update rate bursty or slow → query on every turn.update, diff only; no debounce needed at Ink's ~250 ms cadence.
 - Haiku belief call too slow → run on every Nth `turn.update`, never block Moss loop; Moss hits alone can drive speculation for simple intents.
-- Droid startup latency (spawns CLI) → keep one warm session per turn, pre-create at LISTENING.
+- Droid startup latency (spawns CLI) → keep one warm session pre-created at LISTENING.
 - Barge-in audio clipping → use AudioContext with gain ramp, stop STT ingest during TTS.
 - Any sponsor API down at judging → DEMO_MODE fixture replay.
 

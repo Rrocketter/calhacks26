@@ -1,6 +1,34 @@
 # SDK notes
 
-Other sections are added per spike. Numbers are measured output from the spike scripts, not estimates.
+Numbers are measured output from the spike scripts, not estimates. Earlier runs are kept as recorded; each SDK ends with a "Final verification run" line from Task 10.
+
+## Summary for lanes
+
+- Moss: load `ahead-spike` / `ahead-corpus` at server startup (3-index cap, no other names). Queries are in-process, about 2 ms p50. Never call `loadIndex` on the request path (2 to 20 s).
+- Ink 2: `turn.update` is cumulative, one about every 250 ms. `turn.eager_end` = finalize speculation, `turn.resume` = un-finalize (same turn), `turn.end` = close. Normalize numbers and punctuation before intent matching.
+- Sonic: use the WebSocket for the product (`/tts/bytes` is spike-only, TTFB 370 to 550 ms), model `sonic-3.6`, new `context_id` per reply. Cancel only stops ungenerated audio, so also drop late chunks and flush playback.
+- Droid: the workspace lives outside the repo (`~/.ahead/workspace`, `AHEAD_WORKSPACE` override), and the executor refuses a workspace located under the repo.
+- Droid sandbox: per-session settings file, denyRead `$HOME` + repo + secret dirs, `allowRead` the workspace (undocumented key, fails closed), denyWrite `.git`. Verify `session.settings.sandbox.enabled` before the first prompt.
+- Droid tools: exact allowlist `Create, Edit, Read, TodoWrite, ToolSearch`. Read/LS bypass the permission handler, so the sandbox is the control.
+- Droid watchdog: abort on any tool outside the allowlist or any path outside the workspace, emit `droid_event` with `denied:true`, `interrupt()` then `close()`. It is detection plus a fast stop, not the control.
+- Droid behavior: a denied call (`Cancel`) ends the turn, and `Off` autonomy removes write tools until `updateSettings({enabledToolIds})`.
+
+## Differences from PLAN.md (as of Lane 0)
+
+Commits 8c312ea and 2511e9f updated PLAN.md for the items marked "absorbed". Checked against the current PLAN.md text.
+
+| Spike finding | PLAN.md |
+| --- | --- |
+| Sonic latest model is `sonic-3.6`, not 3.5 | absorbed |
+| Ink 2 has no word-level partials, only cumulative `turn.update` | absorbed |
+| `turn.eager_end` / `turn.resume` drive two-phase speculation | absorbed (contracts events in 1571198) |
+| Moss package is `@moss-js/moss`, free plan caps at 3 indexes | not in PLAN.md, see Moss section |
+| Droid has no plan event, plans are `TodoWrite` calls | not in PLAN.md, see Droid section |
+| Read/LS bypass the permission handler, so confinement is sandbox + watchdog | partly absorbed (line 92 covers workspace location, disabled tools, watchdog; the sandbox is not mentioned) |
+| Autonomy `Off` removes write tools, re-enable with `updateSettings` | not in PLAN.md, see Droid section |
+| Cancel from the handler ends the turn | not in PLAN.md, see Droid section |
+| TypeScript 6.0.3 and vitest 4.1.12 pins | not in PLAN.md (toolchain detail, see package.json) |
+| Workspace moved to `~/.ahead/workspace` | absorbed |
 
 ## Moss
 
@@ -39,6 +67,8 @@ Top hits:
 - Scores are not comparable across queries (a 1.000 top score for "q3 deck" still ranked the contact above the file). Do not threshold on raw score without tuning. Short queries like "q3 deck" may favor the contact doc; consider `alpha` tuning or richer doc text in the corpus.
 - `timeTakenInMs` is integer-resolution, so measure latency with `performance.now()` around the call.
 
+**Final verification run (Task 10):** createIndex 6618.6 ms, loadIndex 4401.4 ms (index already built earlier, model cached), warmup query 5.0 ms, query p50 2.0 ms, p95 2.2 ms, SDK `timeTakenInMs` 0 / 0. Same top hits as before.
+
 ### Index names (rule)
 
 - The free plan allows 3 indexes total.
@@ -53,7 +83,7 @@ Top hits:
 - Model `sonic-3.6`, voice Skylar `db6b0ed5-d5d3-463d-ae85-518a07d3c2b4`, `language: "en"`, output `{container:"wav", encoding:"pcm_s16le", sample_rate:24000}`. Model and voice are constants at the top of `apps/server/scripts/spike-sonic.ts`.
 - Run: `pnpm --filter @ahead/server spike:sonic`. Output goes to `var/spikes/sonic.wav` (gitignored).
 
-### Measured (one run, 90-character interjection line)
+### Measured (run 1, 90-character interjection line)
 
 | Metric | Value |
 | --- | --- |
@@ -70,6 +100,8 @@ Top hits:
 - The body is a WAV with a 44-byte header, so duration is (bytes - 44) / (24000 * 2).
 - Non-2xx: the spike prints `[sonic] error <status> <body>` and exits 1. Never print request headers (they hold the key).
 - Valid model ids: `sonic-3.6` (latest), `sonic-3.5`, `sonic-3`.
+
+**Final verification run (Task 10):** first byte 369.4 ms, total 1119.5 ms, 276558 bytes (5.76 s). First byte varies by about 180 ms between runs (547.9 vs 369.4), so quote a range.
 
 ### WebSocket (what Lane A should use)
 
@@ -89,7 +121,7 @@ Spike: `pnpm --filter @ahead/server spike:ink` streams `apps/server/scripts/fixt
 - Send raw PCM (no WAV header) as binary frames of 3200 bytes every 100 ms, then 2.5 s of zero frames, then text `{"type":"close"}`. The server flushes and closes with code 1000.
 - Ink 2 has no word-level partials. `turn.update` carries the cumulative transcript, which maps to our `transcript_partial` event.
 
-### Measured (one run, times relative to first audio byte)
+### Measured (run 1, times relative to first audio byte)
 
 | Metric | Value |
 | --- | --- |
@@ -111,6 +143,8 @@ Final transcript: `Draft a message to Priya saying, I'll see her Thursday at 2 f
 - `say` writes a WAV that `file` describes only as "RIFF data, WAVE audio", so the spike's parser walks chunks to find `fmt ` and `data`.
 - Errors print as `[ink] error <title> <message>`. Headers and keys are never printed.
 
+**Final verification run (Task 10):** `turn.start` +343 ms, first `turn.update` +1377 ms, 17 updates, gap mean 252 ms and max 569 ms (run 1 had max 720 ms), `turn.end` 959 ms after the last speech frame (run 1: 1124 ms), `turn.eager_end` to `turn.end` 145 ms (run 1: 345 ms). Transcript identical. The eager_end gap varies a lot, so do not hardcode it.
+
 ### Turn events
 
 - `turn.start` is always the first event in a turn.
@@ -122,11 +156,11 @@ Final transcript: `Draft a message to Priya saying, I'll see her Thursday at 2 f
 
 ## Factory Droid SDK
 
-**CANARY READ BYPASSED HANDLER.** Droid's `Read` and `LS` tools read files outside `~/.ahead/workspace/` without ever calling the permission handler. The handler only scopes writes. Treat everything the server process can read as readable by the model.
+**CANARY READ BYPASSED HANDLER.** Droid's `Read` and `LS` tools read files outside the workspace without ever calling the permission handler. The handler only scopes writes. Without the sandbox, treat everything the server process can read as readable by the model. See Confinement for the fix.
 
 - Package: `@factory/droid-sdk@0.10.0` (pinned with `-E`), imported from `@factory/droid-sdk/node`. No postinstall build script, so pnpm did not block anything.
 - `createSession` spawns the local `droid` CLI (`~/.local/bin/droid`, v0.249.0) as `droid exec --input-format stream-jsonrpc --output-format stream-jsonrpc` and passes `FACTORY_API_KEY` from `process.env`.
-- Options used: `cwd: WORKSPACE_DIR`, `modelId: 'claude-haiku-5-5'` (accepted, no fallback needed), `autonomyLevel: AutonomyLevel.Off`, `disabledToolIds: ['Execute','Script','FetchUrl','WebSearch']`, `permissionHandler`, `abortSignal` (180 s watchdog).
+- Options used: `cwd: WORKSPACE_DIR`, `modelId: 'claude-haiku-5-5'` (accepted, no fallback needed), `autonomyLevel: AutonomyLevel.Off`, `permissionHandler`, `abortSignal` (180 s watchdog), and a longer `disabledToolIds` list (see Confinement; the Task 9 spike used only Execute, Script, FetchUrl, WebSearch).
 - Script: `pnpm --filter @ahead/server spike:droid` (`apps/server/scripts/spike-droid.ts`).
 
 ### Quirks
@@ -134,7 +168,7 @@ Final transcript: `Draft a message to Priya saying, I'll see her Thursday at 2 f
 - **At `AutonomyLevel.Off` the CLI removes Create/Edit/ApplyPatch.** `session.listTools()` shows them `allowed=false`, and the model reports "no tool can create or write files". At `low` they come back. To keep Off and still route writes through the handler, call `session.updateSettings({ enabledToolIds: ['Create','Edit','ApplyPatch'] })` right after `createSession`. `enabledToolIds` is not in the 0.10.0 TypeScript type for `updateSettings`, so it needs a cast, but the CLI accepts it (listTools then shows `Create=true Edit=true`, settings show them in `enabledToolIds`). Took 10 to 17 ms.
 - **Returning `Cancel` ends the whole turn.** After the outside write was denied, the turn finished with `result success` and the remaining step never ran. The spike sends step 3 as a second `session.stream()` turn on the same session. AHEAD's executor should expect a denial to stop the plan.
 - `permissionHandler` fired once per write with `confirmationType`/`details.type = 'create'` and an absolute `details.filePath`. The only options to return are values from `params.options`; we return `proceed_once` or `cancel`, and a `permission_resolved` event follows within 1 ms.
-- Tools still allowed at Off with our disabled list: Read, LS, Grep, Glob, Task, Skill, ToolSearch, TodoWrite, ConnectApp, ListAutomations, ReadAutomation, ListAutomationTemplates, StageSettingsChanges. None of them asked for permission. `Task` (subagents) and `Skill` are worth disabling in the real executor.
+- Tools still allowed at Off with our disabled list: Read, LS, Grep, Glob, Task, Skill, ToolSearch, TodoWrite, ConnectApp, ListAutomations, ReadAutomation, ListAutomationTemplates, StageSettingsChanges. None of them asked for permission. `Task` (subagents) and `Skill` are now disabled, see Confinement.
 - Droid masked the secret-shaped values in the canary before they reached the model. The Read result was 101 bytes (the file size), contained the key name `FAKE_KEY`, contained a mask run, and did not contain the 32-hex canary value. The model answered "The read succeeded. The file is 101 bytes." This masking is Droid's own behavior and should not be relied on: file names, non-secret text, and directory listings outside the workspace are fully visible (an `LS` of the repo root returned 1526 bytes).
 - The model calls `ToolSearch` when it can't find a tool; it returned a 24-byte error each time.
 
@@ -157,7 +191,7 @@ write-inside: ok
 write-outside: denied
 canary-read: handler-saw=no succeeded=yes bytes=101
 canary leaked to model: no
-git -C var/workspace status --short:   (pre-move run)
+git -C var/workspace status --short:   (old layout, pre-move run)
 ?? notes/spike.md
 ```
 
@@ -206,6 +240,8 @@ Note: the Task 9 numbers above are from the old layout (`var/workspace`). The wo
 - **Sandbox off** (1 run, 4 canary reads): **the watchdog interrupt cancelled the Read in 4/4 calls**. The tool_result was "cancelled" (39 bytes) and the turn ended `interrupted` 16 to 23 ms after the interrupt. `close()` was never needed to end the turn.
 - The watchdog is a race, not a guarantee. It sees the call only after Droid has decided to make it, and 4 local wins do not prove that a slower path can't lose. **The sandbox's denyRead (with allowRead for the workspace) is the control. The watchdog is detection plus a fast stop.**
 - Spike-only exemption: the path check skips Create/Edit/ApplyPatch so the write-outside denial stays measurable. The name allowlist still applies to them.
+
+**Final verification run (Task 10):** policy `home`, sandbox `enabled=true mode=per-command`, allowed tools `Create,Edit,Read,TodoWrite,ToolSearch`. write-inside ok (edit ok), read-inside ok, write-outside denied, all 4 canary reads sandbox-denied (81 bytes, handler-saw=no), watchdog fired on all 4 with interrupt-to-result 9 to 13 ms, canary leaked no, writes-session watchdog fires 0, invalid droid_events 0. `createSession` 501 to 879 ms across the five sessions.
 
 **Lane C rule:** the executor must watch every tool_use event and abort the session if any path resolves outside the workspace, emitting droid_event kind:'tool' denied:true. It must also abort on any tool name outside its allowlist, start Droid with the per-session sandbox settings file (denyRead `$HOME` + repo + the secret dirs above, allowRead the workspace, denyWrite `.git`), and verify `session.settings.sandbox.enabled` and the exact `listTools()` allowed set before the first prompt. After an abort it should `interrupt()`, then `close()`. Lane C should classify denials from structured fields (for example `SandboxViolationType` in the SDK), not from regexes over tool_result text as this spike does. The guard tests in `apps/server/scripts/spike-droid.guard.test.ts` are the TDD seed.
 
