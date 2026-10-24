@@ -15,7 +15,15 @@ export function Stepper({ hud }: { hud: HudState }) {
         const shown = hit.length ? hit.slice(-1) : slot;
         const reached = hit.length > 0;
         const bad = shown[0] === 'ROLLED_BACK' && reached;
-        const cls = ['step', reached && 'reached', i === current && 'current', bad && 'bad', i <= current && 'linked']
+        const good = shown[0] === 'COMMITTED' && reached;
+        const cls = [
+          'step',
+          reached && 'reached',
+          i === current && 'current',
+          bad && 'bad',
+          good && 'good',
+          i <= current && 'linked',
+        ]
           .filter(Boolean)
           .join(' ');
         return (

@@ -1,0 +1,78 @@
+import { useEffect, useRef, useState } from 'react';
+import { micLevel } from '../audio/level';
+
+const reduced = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// Eases from the last shown value to `value` so counters visibly tick instead of jumping.
+export function Tween({ value, digits = 0, ms = 450 }: { value: number; digits?: number; ms?: number }) {
+  const [shown, setShown] = useState(value);
+  const at = useRef(value);
+  useEffect(() => {
+    const from = at.current;
+    if (from === value || reduced()) {
+      at.current = value;
+      setShown(value);
+      return;
+    }
+    const t0 = performance.now();
+    let raf = 0;
+    const tick = (now: number) => {
+      const k = Math.min(1, (now - t0) / ms);
+      const v = from + (value - from) * (1 - (1 - k) ** 3);
+      at.current = v;
+      setShown(v);
+      if (k < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [value, ms]);
+  return <>{shown.toFixed(digits)}</>;
+}
+
+// Appends `last` each time `count` moves; a drop in count (new turn) starts over.
+export function useSeries(count: number, last: number | null, max = 32): number[] {
+  const [s, setS] = useState({ count: 0, values: [] as number[] });
+  if (s.count !== count) {
+    const base = count < s.count ? [] : s.values;
+    setS({ count, values: count === 0 || last === null ? [] : [...base, last].slice(-max) });
+  }
+  return s.values;
+}
+
+export function Sparkline({ values, w = 112, h = 30 }: { values: number[]; w?: number; h?: number }) {
+  const top = Math.max(4, ...values) * 1.15;
+  // Points spread over the width until there are enough to fill it at a fixed pitch.
+  const step = w / Math.max(values.length - 1, 12);
+  const pts = values.map((v, i) => [i * step, h - 2 - (v / top) * (h - 6)] as const);
+  const last = pts.at(-1);
+  return (
+    <svg className="spark" width={w} height={h} viewBox={`0 0 ${w} ${h}`} aria-hidden>
+      <line className="spark-base" x1={0} x2={w} y1={h - 2} y2={h - 2} />
+      {pts.length > 1 && <polyline points={pts.map((p) => p.join(',')).join(' ')} />}
+      {last && <circle key={values.length} cx={last[0]} cy={last[1]} r={3} />}
+    </svg>
+  );
+}
+
+// Mic level as a thin bar growing from the middle of the top bar's bottom rule,
+// driven straight from the capture RMS without React renders.
+export function LevelMeter() {
+  const bar = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    let raf = 0;
+    let shown = 0;
+    const tick = () => {
+      const target = Math.min(1, Math.sqrt(micLevel.get()) * 2.2);
+      shown = target > shown ? target : shown * 0.9 + target * 0.1;
+      bar.current?.style.setProperty('--level', shown.toFixed(3));
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, []);
+  return (
+    <span className="meter" aria-hidden>
+      <span className="meter-fill" ref={bar} />
+    </span>
+  );
+}

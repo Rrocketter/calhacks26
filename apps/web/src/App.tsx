@@ -85,7 +85,8 @@ export function App() {
   }
 
   return (
-    <div className="hud">
+    // data-state drives the ambient hue (LISTENING cool, SPECULATING / STAGED accent, outcome green / red).
+    <div className="hud" data-state={hud.state}>
       <TopBar
         hud={hud}
         mode={mode}

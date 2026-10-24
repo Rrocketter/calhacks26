@@ -1,4 +1,5 @@
 import type { HudState } from './state';
+import { LevelMeter, Tween } from './motion';
 
 type Props = {
   hud: HudState;
@@ -10,13 +11,19 @@ type Props = {
   onDemo(): void;
 };
 
-function Counter({ label, value, unit }: { label: string; value: string; unit?: string }) {
+type CounterProps = { label: string; short: string; value: number | null; digits?: number; unit?: string };
+
+// `short` replaces the label on narrow screens so the bar never overflows.
+function Counter({ label, short, value, digits = 0, unit }: CounterProps) {
   return (
     <div className="counter">
-      <span className="label">{label}</span>
+      <span className="label" title={label}>
+        <span className="long">{label}</span>
+        <span className="short">{short}</span>
+      </span>
       <span className="value num">
-        {value}
-        {unit && value !== '-' && <span className="unit">{unit}</span>}
+        {value === null ? '-' : <Tween value={value} digits={digits} />}
+        {unit && value !== null && <span className="unit">{unit}</span>}
       </span>
     </div>
   );
@@ -24,22 +31,42 @@ function Counter({ label, value, unit }: { label: string; value: string; unit?: 
 
 export function TopBar({ hud, mode, running, starting, onStart, onStop, onDemo }: Props) {
   const { count, totalMs } = hud.moss;
-  const avg = count ? (totalMs / count).toFixed(1) : '-';
+  const avg = count ? totalMs / count : null;
   const ttfa = hud.ttfa.client ?? hud.ttfa.server;
+  // Staged work for this turn, and the turn has ended: the next "yes" / "no" applies it.
+  const awaiting =
+    (running || mode === 'mock') &&
+    hud.state === 'STAGED' &&
+    hud.droidTurnId === hud.stateTurnId &&
+    hud.finals.some((f) => f.turnId === hud.stateTurnId);
   return (
     <header className="topbar">
-      <span className="wordmark">AHEAD</span>
+      <span className="wordmark">
+        AHEAD<span className="chevron" aria-hidden />
+      </span>
       {mode === 'mock' ? (
         <span className="badge on">MOCK</span>
       ) : (
         <span className={running ? 'badge on' : 'badge'}>LIVE</span>
       )}
+      {awaiting ? (
+        <span className="state-pill yesno" role="status" key="yesno">
+          <span className="state-dot" />
+          Listening for yes / no
+        </span>
+      ) : (
+        <span className="state-pill num" key={hud.state}>
+          <span className="state-dot" />
+          {hud.state.replace(/_/g, ' ')}
+        </span>
+      )}
       <div className="counters">
-        <Counter label="Moss queries · this turn" value={String(count)} />
-        <Counter label="Avg retrieval" value={avg} unit="ms" />
-        <Counter label="Time to first audio" value={ttfa === undefined ? '-' : String(Math.round(ttfa))} unit="ms" />
+        <Counter label="Moss queries · turn" short="Queries" value={count} />
+        <Counter label="Avg retrieval" short="Avg" value={avg} digits={1} unit="ms" />
+        <Counter label="Time to first audio" short="TTFA" value={ttfa === undefined ? null : Math.round(ttfa)} unit="ms" />
       </div>
       <span className="spacer" />
+      {mode === 'live' && running && <LevelMeter />}
       <div className="controls">
         {mode === 'live' && (
           <button className="btn" disabled={starting} onClick={running ? onStop : onStart}>
