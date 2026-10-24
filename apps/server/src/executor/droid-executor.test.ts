@@ -60,6 +60,8 @@ interface Factory {
   phase2: Phase2Mode[];
   // Phase 1 behaviour per call, in order; normal once exhausted.
   phase1: 'block'[];
+  // When set, openSession waits on it before returning a session.
+  openGate: Promise<void> | null;
   phase2Started: () => Promise<void>;
 }
 
@@ -81,6 +83,7 @@ function factory(root: string, opts: { fail?: string } = {}): Factory {
     signals: [],
     phase2: [],
     phase1: [],
+    openGate: null,
     open: async () => {
       throw new Error('unset');
     },
@@ -92,6 +95,7 @@ function factory(root: string, opts: { fail?: string } = {}): Factory {
   f.open = async (handler, signal) => {
     f.handlers.push(handler);
     f.signals.push(signal);
+    if (f.openGate) await f.openGate;
     if (opts.fail) throw new Error(opts.fail);
     const prompts: string[] = [];
     const calls: string[] = [];
@@ -451,4 +455,35 @@ test('resetToPhase1 for a turn that is not live does not interrupt the running p
   await exec.rollback('t1');
   await Promise.all([blocked, r]);
   assertValid(events);
+});
+
+test('un-awaited phase1, phase2, resetToPhase1, phase2 runs only the fresh phase2', { timeout: 5000 }, async () => {
+  const { root, git, events, exec } = setup();
+  await Promise.all([
+    exec.phase1('t1', belief()),
+    exec.phase2('t1', belief()),
+    exec.resetToPhase1('t1'),
+    exec.phase2('t1', belief()),
+  ]);
+  assert.equal(droid(events, 'result').length, 1);
+  assert.equal(droid(events, 'diff').length, 1);
+  assert.match(calendar(root), /2026-11-02/);
+  assert.equal(await git.currentBranch(), 'spec/t1');
+  assertValid(events);
+});
+
+test('rollback while phase1 waits for the session open: the phase1 prompt is never streamed', { timeout: 5000 }, async () => {
+  const { git, raw, f, exec } = setup();
+  let release: () => void = () => undefined;
+  f.openGate = new Promise<void>((r) => (release = r));
+  const p1 = exec.phase1('t1', belief());
+  await new Promise((r) => setTimeout(r, 10)); // phase1 is now parked in openSession
+  assert.equal(f.handlers.length, 1);
+  const rb = exec.rollback('t1');
+  release();
+  await Promise.all([p1, rb]);
+  assert.equal(f.sessions.length, 1);
+  assert.equal(f.sessions[0]!.prompts.length, 0);
+  assert.equal(await git.currentBranch(), 'main');
+  assert.deepEqual(specBranches(raw), []);
 });

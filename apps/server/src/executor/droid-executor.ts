@@ -72,6 +72,8 @@ export class DroidExecutor implements Executor {
   private sessionTimer: NodeJS.Timeout | null = null;
   private opening: Promise<void> | null = null;
   private live: Live | null = null;
+  // Turn of the most recent phase1() call, set at call time (live is only set once that phase1 runs).
+  private queuedTurnId: string | null = null;
   private running: Running | null = null;
   private chain: Promise<unknown> = Promise.resolve();
   // Bumped by rollback (supersedes any phase) and resetToPhase1 (supersedes Phase 2). A phase
@@ -159,6 +161,7 @@ export class DroidExecutor implements Executor {
 
   phase1(turnId: string, belief: Belief): Promise<void> {
     const gen = this.rollbackGen;
+    this.queuedTurnId = turnId;
     return this.enqueue(async () => {
       if (gen !== this.rollbackGen) return;
       if (this.live) await this.doRollback(this.live.turnId);
@@ -173,6 +176,8 @@ export class DroidExecutor implements Executor {
         return this.fail('git prepare failed', e);
       }
       const prompt = phase1Prompt(belief, listFiles(this.opts.workspace));
+      // A rollback that arrived during session open or prepare had nothing to interrupt.
+      if (gen !== this.rollbackGen) return;
       this.running = { turnId, phase: 'phase1' };
       const r = await runTurn(s, prompt, { turnId, guard: this.guard, emit: this.opts.emit, graceMs: this.opts.graceMs }).finally(
         () => {
@@ -237,11 +242,9 @@ export class DroidExecutor implements Executor {
 
   // Generation bump and interrupt happen synchronously; the reset itself joins the chain in call order.
   resetToPhase1(turnId: string): Promise<void> {
-    let interrupted: Promise<void> = Promise.resolve();
-    if (this.live?.turnId === turnId) {
-      this.resetGen++;
-      interrupted = this.interruptRunning(['phase2']);
-    }
+    // queuedTurnId also covers a phase1 that is queued or still opening, so a queued phase2 is superseded.
+    if (this.queuedTurnId === turnId) this.resetGen++;
+    const interrupted = this.live?.turnId === turnId ? this.interruptRunning(['phase2']) : Promise.resolve();
     return this.enqueue(async () => {
       await interrupted;
       const post1 = this.live?.turnId === turnId ? this.live.post1 : null;
@@ -283,7 +286,8 @@ export class DroidExecutor implements Executor {
   // Runs on the chain. Leaves no live speculation: the named turn and any other live one are discarded.
   private async doRollback(turnId: string): Promise<void> {
     const t0 = performance.now();
-    // A running phase was already interrupted by rollback(); here the session is idle.
+    // On the chain, so no phase is streaming: rollback() interrupted a running one before joining,
+    // and phase1's own pre-rollback runs between phases.
     await this.closeSession();
     const other = this.live && this.live.turnId !== turnId ? this.live.turnId : null;
     this.live = null;
