@@ -5,7 +5,6 @@ type Props = {
   mode: 'live' | 'mock';
   running: boolean;
   starting: boolean;
-  error: string | null;
   onStart(): void;
   onStop(): void;
   onDemo(): void;
@@ -23,7 +22,7 @@ function Counter({ label, value, unit }: { label: string; value: string; unit?: 
   );
 }
 
-export function TopBar({ hud, mode, running, starting, error, onStart, onStop, onDemo }: Props) {
+export function TopBar({ hud, mode, running, starting, onStart, onStop, onDemo }: Props) {
   const { count, totalMs } = hud.moss;
   const avg = count ? (totalMs / count).toFixed(1) : '-';
   const ttfa = hud.ttfa.client ?? hud.ttfa.server;
@@ -40,13 +39,7 @@ export function TopBar({ hud, mode, running, starting, error, onStart, onStop, o
         <Counter label="Avg retrieval" value={avg} unit="ms" />
         <Counter label="Time to first audio" value={ttfa === undefined ? '-' : String(Math.round(ttfa))} unit="ms" />
       </div>
-      {error ? (
-        <span className="error" title={error}>
-          {error}
-        </span>
-      ) : (
-        <span className="spacer" />
-      )}
+      <span className="spacer" />
       <div className="controls">
         {mode === 'live' && (
           <button className="btn" disabled={starting} onClick={running ? onStop : onStart}>

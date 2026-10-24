@@ -19,10 +19,11 @@ export function BeliefPanel({ hud }: { hud: HudState }) {
           </span>
         )}
       </div>
-      <div className={intent === 'unknown' ? 'intent unknown' : 'intent'}>{intent}</div>
+      {/* Underscores as spaces so long intents wrap on words; never truncated */}
+      <div className={intent === 'unknown' ? 'intent unknown' : 'intent'}>{intent.replace(/_/g, ' ')}</div>
       <div className="conf">
         <div className="conf-track">
-          <div className="conf-fill" style={{ width: `${conf * 100}%` }} />
+          <div className="conf-fill" style={{ width: `${Math.min(100, Math.max(0, conf * 100))}%` }} />
           <div className="conf-tick" style={{ left: `${LOCK * 100}%` }}>
             <span className="label">Lock</span>
           </div>

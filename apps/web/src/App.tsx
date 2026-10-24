@@ -81,12 +81,11 @@ export function App() {
         mode={mode}
         running={running}
         starting={starting}
-        error={hud.error ?? startError}
         onStart={start}
         onStop={() => transport.current?.stop()}
         onDemo={demo}
       />
-      <Transcript hud={hud} />
+      <Transcript hud={hud} error={hud.error ?? startError} />
       <BeliefPanel hud={hud} />
       <section className="panel">
         <div className="panel-head">

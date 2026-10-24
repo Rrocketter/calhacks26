@@ -5,7 +5,7 @@
   --line: #24262c;
   --text: #e8e9ec;
   --dim: #8a8d96;
-  --faint: #5a5d66;
+  --faint: #7e818a; /* 4.7:1 on --panel */
   --accent: #f5b700;
   --bad: #ff4d4f;
   --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -115,18 +115,6 @@ body {
   margin-left: 4px;
 }
 
-.topbar .error {
-  flex: 1 1 0;
-  min-width: 0;
-  color: var(--bad);
-  font-family: var(--mono);
-  font-size: 15px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  text-align: right;
-}
-
 .topbar .spacer {
   flex: 1 1 0;
 }
@@ -216,6 +204,23 @@ mark {
   padding: 0 0.12em;
 }
 
+/* Errors: top of the transcript column, always fully visible */
+.error-banner {
+  flex: none;
+  color: var(--bad);
+  background: rgba(255, 77, 79, 0.1);
+  border: 1px solid var(--bad);
+  border-radius: 6px;
+  padding: 10px 14px;
+  font-family: var(--mono);
+  font-size: 18px;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
 /* Transcript */
 .finals {
   display: flex;
@@ -287,9 +292,7 @@ mark {
   font-size: 48px;
   font-weight: 700;
   line-height: 1.05;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .intent.unknown {
@@ -308,7 +311,7 @@ mark {
   height: 12px;
   background: var(--raised);
   border-radius: 6px;
-  margin: 18px 0 2px;
+  margin: 30px 0 2px;
 }
 
 .conf-fill {
@@ -331,7 +334,7 @@ mark {
   bottom: calc(100% + 4px);
   left: 50%;
   transform: translateX(-50%);
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .conf-value {
