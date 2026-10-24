@@ -6,7 +6,7 @@ type ApiError = {
   errors?: { reason?: string }[];
   response?: {
     status?: number;
-    headers?: Record<string, string | undefined>;
+    headers?: Record<string, string | undefined> | { get(name: string): string | null };
     data?: { error?: { errors?: { reason?: string }[] } };
   };
 };
@@ -27,7 +27,9 @@ const BASE_MS = 1000;
 const CAP_MS = 32000;
 
 export function backoffMs(attempt: number, err: unknown, rand: () => number = Math.random): number {
-  const after = Number((err as ApiError | undefined)?.response?.headers?.['retry-after']);
+  // gaxios 7 hands back a fetch Headers; older versions a plain object.
+  const h = (err as ApiError | undefined)?.response?.headers;
+  const after = Number(h && 'get' in h && typeof h.get === 'function' ? h.get('retry-after') : (h as Record<string, string | undefined> | undefined)?.['retry-after']);
   if (after > 0) return Math.min(after * 1000, 60000);
   const exp = Math.min(BASE_MS * 2 ** (attempt - 1), CAP_MS);
   return exp === CAP_MS ? CAP_MS : exp + Math.floor(rand() * BASE_MS);

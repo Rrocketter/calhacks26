@@ -1,0 +1,34 @@
+[
+  {
+    "id": "me@example.com",
+    "summary": "me@example.com",
+    "primary": true,
+    "accessRole": "owner"
+  },
+  {
+    "id": "me@school.example.edu",
+    "summary": "me@school.example.edu",
+    "accessRole": "owner"
+  },
+  {
+    "id": "r1@group.calendar.google.com",
+    "summary": "Research",
+    "accessRole": "writer"
+  },
+  {
+    "id": "r2@group.calendar.google.com",
+    "summary": "Recruiting",
+    "accessRole": "owner"
+  },
+  {
+    "id": "en.usa#holiday@group.v.calendar.google.com",
+    "summary": "Holidays in United States",
+    "accessRole": "reader"
+  },
+  {
+    "id": "x@group.calendar.google.com",
+    "summary": "Old Name",
+    "summaryOverride": "Astro Club",
+    "accessRole": "freeBusyReader"
+  }
+]

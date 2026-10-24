@@ -1,13 +1,22 @@
 // Pure shaping for import-google.ts: Google Calendar / Gmail API objects in, the same
 // shapes gen-corpus produces out. No I/O, so it is tested against fixture JSON.
 import type { CorpusDoc } from '../src/belief/types.js';
-import { calendarDoc, type SeedContact, type SeedEvent } from './gen-corpus.js';
+import { calendarDoc, type SeedEvent } from './gen-corpus.js';
 
 // The subset of the googleapis response types we read.
 export type GAttendee = { email?: string | null; displayName?: string | null; self?: boolean | null; resource?: boolean | null };
 export type GTime = { dateTime?: string | null; date?: string | null };
+export type GCalendar = {
+  id?: string | null;
+  summary?: string | null;
+  summaryOverride?: string | null;
+  primary?: boolean | null;
+  accessRole?: string | null;
+};
+// `calendar` is not a Google field: import-google.ts tags each event with its calendar label.
 export type GEvent = {
   id?: string | null;
+  calendar?: string | null;
   status?: string | null;
   summary?: string | null;
   location?: string | null;
@@ -26,6 +35,11 @@ export type GMessage = { id?: string | null; internalDate?: string | null; snipp
 export type GThread = { id?: string | null; messages?: GMessage[] | null };
 
 export type Person = { name: string; email: string };
+export type ShapedEvent = SeedEvent & { calendar: string };
+// Name only: no email or phone ever lands in contacts.json.
+export type GContact = { id: string; name: string; notes: string; sources: string[] };
+// CorpusDoc (belief/types.ts) plus the calendar label; build-index passes extra metadata through.
+export type GCorpusDoc = Omit<CorpusDoc, 'metadata'> & { metadata: CorpusDoc['metadata'] & { calendar?: string } };
 export type ShapedEmail = {
   id: string;
   subject: string;
@@ -54,7 +68,8 @@ function prettify(email: string): string {
 
 function personName(displayName: string | null | undefined, email: string): string {
   const n = (displayName ?? '').replace(/^"|"$/g, '').trim();
-  if (!n || n.includes('@')) return prettify(email);
+  // A display name that carries an address or domain ("John (john at corp.com)") is not used.
+  if (!n || n.includes('@') || /\b[\w-]+\.(com|org|net|edu|io)\b/i.test(n)) return prettify(email);
   const parts = n.split(',').map((s) => s.trim());
   return parts.length === 2 && parts[0] && parts[1] ? `${parts[1]} ${parts[0]}` : n;
 }
@@ -93,19 +108,99 @@ function when(t: GTime | null | undefined, tz: string): string {
   throw new Error('event without start/end');
 }
 
-export function shapeEvents(items: GEvent[], tz: string): SeedEvent[] {
-  return items
-    .filter((e) => e.id && e.status !== 'cancelled' && (e.start?.dateTime || e.start?.date))
-    .map((e) => ({
+// Primary is "primary"; a calendar named after an address is labeled by its domain, so no
+// address ever reaches metadata or logs.
+export function calendarLabel(c: GCalendar): string {
+  if (c.primary) return 'primary';
+  const name = (c.summaryOverride || c.summary || c.id || 'calendar').trim();
+  const at = name.lastIndexOf('@');
+  if (at >= 0 && !name.includes(' ')) return name.slice(at + 1);
+  return name.includes('@') ? redactEmails(name, new Map()) : name;
+}
+
+export function parseExclude(raw: string | undefined): string[] {
+  return (raw ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+}
+
+// Owner or writer calendars only; read-only subscriptions (holidays, shared groups) are skipped.
+// `exclude` matches the label or the calendar's own name, case-insensitive.
+export function selectCalendars(
+  list: GCalendar[],
+  exclude: string[],
+): { kept: { id: string; label: string }[]; readOnly: number; excluded: string[] } {
+  const kept: { id: string; label: string }[] = [];
+  const excluded: string[] = [];
+  let readOnly = 0;
+  for (const c of list) {
+    if (!c.id) continue;
+    if (c.accessRole !== 'owner' && c.accessRole !== 'writer') {
+      readOnly++;
+      continue;
+    }
+    const label = calendarLabel(c);
+    const names = [label, c.summary, c.summaryOverride].map((n) => (n ?? '').trim().toLowerCase());
+    if (names.some((n) => n && exclude.includes(n))) excluded.push(label);
+    else kept.push({ id: c.id, label });
+  }
+  return { kept, readOnly, excluded };
+}
+
+const NOT_NAMES = new Set(['team', 'group', 'everyone', 'all', 'me', 'us', 'them', 'friends', 'family', 'lab']);
+
+// "Pulsar Project with Hayk & Luka" -> ["Hayk", "Luka"]. Only capitalized one- or two-word
+// pieces after "with" / "w/", up to any bracket, colon, pipe, or dash separator.
+export function namesFromTitle(title: string): string[] {
+  const m = /\b(?:with|w\/)\s+(.+)$/i.exec(title);
+  if (!m) return [];
+  const tail = m[1]!.split(/\s+[-–—|]\s+|[([:|]/)[0]!;
+  return tail
+    .split(/\s*(?:,|&|\+|\/|\band\b)\s*/i)
+    .map((p) => p.trim())
+    .filter((p) => /^\p{Lu}[\p{L}'’-]*(?: \p{Lu}[\p{L}'’-]*)?$/u.test(p) && !NOT_NAMES.has(p.toLowerCase()));
+}
+
+function uniqueEvents(items: GEvent[]): GEvent[] {
+  const seen = new Set<string>();
+  return items.filter((e) => {
+    if (!e.id || e.status === 'cancelled' || !(e.start?.dateTime || e.start?.date) || seen.has(e.id)) return false;
+    seen.add(e.id);
+    return true;
+  });
+}
+
+function realAttendees(e: GEvent, self: string): string[] {
+  return (e.attendees ?? [])
+    .filter((a) => a.email && !a.self && !a.resource && a.email.toLowerCase() !== self)
+    .map((a) => personName(a.displayName, a.email!))
+    .filter(Boolean);
+}
+
+// An event on two calendars (shared invite) is kept once, from the first calendar listed.
+// Events with no other attendees take people from the title; a first name that matches
+// exactly one known attendee's first name becomes that full name.
+export function shapeEvents(items: GEvent[], tz: string, selfEmail = ''): ShapedEvent[] {
+  const self = selfEmail.toLowerCase();
+  const events = uniqueEvents(items);
+  const full = [...new Set(events.flatMap((e) => realAttendees(e, self)))].filter((n) => n.includes(' '));
+  const resolve = (n: string): string => {
+    if (n.includes(' ')) return n;
+    const hits = full.filter((f) => f.split(' ')[0]!.toLowerCase() === n.toLowerCase());
+    return hits.length === 1 ? hits[0]! : n;
+  };
+  return events.map((e) => {
+    const real = realAttendees(e, self);
+    // calendar.json is read by Droid, so it gets the same address/link redaction as the corpus.
+    const title = redactEmails(e.summary?.trim() || '(no title)', new Map());
+    return {
       id: `g-evt-${e.id}`,
-      title: e.summary?.trim() || '(no title)',
+      title,
       start: when(e.start, tz),
       end: when(e.end ?? e.start, tz),
-      attendees: (e.attendees ?? [])
-        .filter((a) => a.email && !a.self && !a.resource)
-        .map((a) => personName(a.displayName, a.email!)),
-      location: e.location?.trim() ?? '',
-    }));
+      attendees: real.length ? real : [...new Set(namesFromTitle(title).map(resolve))],
+      location: redactEmails(e.location?.trim() ?? '', new Map()),
+      calendar: e.calendar ?? 'primary',
+    };
+  });
 }
 
 function decode(data: string): string {
@@ -163,7 +258,8 @@ export function shapeThreads(threads: GThread[], selfEmail: string, tz: string):
     const plain = findBody(m.payload, 'text/plain');
     const html = plain ? undefined : findBody(m.payload, 'text/html');
     const raw = plain ?? (html ? stripHtml(html) : entities(m.snippet ?? ''));
-    const ms = Number(m.internalDate) || Date.parse(header('date')) || 0;
+    const ms = Number(m.internalDate) || Date.parse(header('date'));
+    if (!ms) continue;
     kept.push({
       id: t.id,
       subject: subject || '(no subject)',
@@ -177,35 +273,32 @@ export function shapeThreads(threads: GThread[], selfEmail: string, tz: string):
   return { kept, skipped };
 }
 
-export function deriveContacts(events: GEvent[], emails: ShapedEmail[], selfEmail: string): SeedContact[] {
+// People from event attendees (or titles) and email senders, keyed by name. Self and
+// no-reply senders are left out. Only names, counts, and sources are kept.
+export function deriveContacts(events: ShapedEvent[], emails: ShapedEmail[], selfEmail: string): GContact[] {
   const self = selfEmail.toLowerCase();
-  const seen = new Map<string, { name: string; events: number; threads: number }>();
-  const add = (p: Person, kind: 'events' | 'threads'): void => {
-    if (!p.email || p.email === self || NO_REPLY.test(p.email)) return;
-    const c = seen.get(p.email) ?? { name: p.name, events: 0, threads: 0 };
+  const seen = new Map<string, { name: string; events: number; threads: number; sources: Set<string> }>();
+  const add = (name: string, kind: 'events' | 'threads', source: string): void => {
+    const key = name.toLowerCase();
+    const c = seen.get(key) ?? { name, events: 0, threads: 0, sources: new Set<string>() };
     c[kind]++;
-    seen.set(p.email, c);
+    c.sources.add(source);
+    seen.set(key, c);
   };
-  for (const e of events) {
-    if (e.status === 'cancelled') continue;
-    for (const a of e.attendees ?? []) {
-      if (a.email && !a.self && !a.resource) {
-        const email = a.email.toLowerCase();
-        add({ name: personName(a.displayName, email), email }, 'events');
-      }
-    }
+  for (const e of events) for (const a of e.attendees) add(a, 'events', e.calendar);
+  for (const m of emails) {
+    if (m.from.name && m.from.email && m.from.email !== self && !NO_REPLY.test(m.from.email)) add(m.from.name, 'threads', 'gmail');
   }
-  for (const m of emails) add(m.from, 'threads');
 
   const plural = (n: number, w: string): string => `${n} ${w}${n === 1 ? '' : 's'}`;
   const ids = new Set<string>();
-  return [...seen].map(([email, c]) => {
+  return [...seen.values()].map((c) => {
     const base = `g-contact-${c.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'unknown'}`;
     let id = base;
     for (let i = 2; ids.has(id); i++) id = `${base}-${i}`;
     ids.add(id);
     const notes = [c.events && plural(c.events, 'event'), c.threads && plural(c.threads, 'email thread')].filter(Boolean);
-    return { id, name: c.name, email, phone: '', notes: `${notes.join(', ')}.` };
+    return { id, name: c.name, notes: `${notes.join(', ')}.`, sources: [...c.sources] };
   });
 }
 
@@ -221,10 +314,9 @@ export function redactEmails(text: string, known: Map<string, string>): string {
     .replace(/\S*@\S+/g, '[email]');
 }
 
-export function toCorpus(events: SeedEvent[], contacts: SeedContact[], emails: ShapedEmail[]): CorpusDoc[] {
+export function toCorpus(events: ShapedEvent[], contacts: GContact[], emails: ShapedEmail[]): GCorpusDoc[] {
   const known = new Map<string, string>();
   for (const m of emails) for (const p of [m.from, ...m.to]) if (!m.fromSelf || p !== m.from) known.set(p.email, p.name);
-  for (const c of contacts) known.set(c.email, c.name);
   const r = (s: string): string => redactEmails(s, known);
 
   // Most recent date each person shows up, for contact doc metadata.
@@ -235,7 +327,7 @@ export function toCorpus(events: SeedEvent[], contacts: SeedContact[], emails: S
   for (const e of events) for (const a of e.attendees) touch(a, e.start.slice(0, 10));
   for (const m of emails) for (const p of m.fromSelf ? m.to : [m.from]) touch(p.name, m.date);
 
-  const docs: CorpusDoc[] = [];
+  const docs: GCorpusDoc[] = [];
   for (const c of contacts) {
     docs.push({
       id: c.id,
@@ -243,7 +335,10 @@ export function toCorpus(events: SeedEvent[], contacts: SeedContact[], emails: S
       metadata: { type: 'contact', date: last.get(c.name) ?? '', people: c.name, title: c.name },
     });
   }
-  for (const e of events) docs.push(calendarDoc({ ...e, title: r(e.title), location: r(e.location) }));
+  for (const e of events) {
+    const d = calendarDoc({ ...e, title: r(e.title), location: r(e.location) });
+    docs.push({ ...d, metadata: { ...d.metadata, calendar: e.calendar } });
+  }
   for (const m of emails) {
     const people = m.fromSelf ? m.to.map((p) => p.name) : [m.from.name];
     const who = m.fromSelf ? `me to ${people.join(', ') || 'myself'}` : m.from.name;

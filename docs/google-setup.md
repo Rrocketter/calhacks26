@@ -11,9 +11,9 @@ You need about 10 minutes and a Google account. All steps below happen in a brow
 
 ## What gets imported
 
-- Calendar: events on your primary calendar from 30 days ago to 60 days ahead.
+- Calendar: events from 30 days ago to 60 days ahead, from every calendar you own or can edit (your primary calendar, other accounts' calendars shared to you with edit rights, and calendars you created, like "Research"). Read-only subscriptions such as holiday calendars or group calendars you can only view are skipped. Each event is tagged with its calendar's name. A calendar named after an email address is tagged with just the domain, and your primary calendar is tagged `primary`. An invite that shows up on two calendars is kept once.
 - Gmail: your 60 most recent threads. For each thread it keeps the subject, sender, recipients, date, and Gmail's short preview snippet of the first message (about 200 characters). Message bodies and attachments are never downloaded.
-- Contacts: built from event attendees and email senders. Your own address and no-reply senders are left out.
+- Contacts: built from event attendees and email senders. When an event has no other attendees, names come from the title instead: "Pulsar Project with Hayk & Luka" gives Hayk and Luka. A first name that matches exactly one known attendee becomes that person's full name. `contacts.json` holds names only, no email addresses or phone numbers, plus the calendars (or `gmail`) each person came from. Your own address and no-reply senders are left out.
 
 Before anything reaches the search corpus:
 
@@ -87,6 +87,12 @@ Add this line to the repo's `.env`:
 IMPORT_GOOGLE=1
 ```
 
+To leave calendars out, list their names, comma-separated (case does not matter). You can put this in `.env` or in front of the command:
+
+```
+CALENDAR_EXCLUDE=Recruiting
+```
+
 The flag gates three things. Without it, nothing changes:
 
 - `pnpm import:google` refuses to run.
@@ -110,9 +116,14 @@ Your browser opens Google's consent page (the URL is also printed in the termina
 The terminal then prints something like:
 
 ```
-[google] calendar events 310.4ms
+[google] calendar list 120.3ms
+[google] calendar events [primary] 310.4ms
+[google] calendar events [Research] 140.2ms
+[google] calendars kept 3, read-only skipped 4, excluded 1 (Recruiting)
 [google] gmail 60 threads 6120.0ms
-[google] events 42 (of 42 fetched)
+[google] events [primary] 30
+[google] events [Research] 12
+[google] events 42 (of 44 fetched, duplicates and cancelled dropped)
 [google] threads 60, kept 52, skipped 8 by subject blocklist
 [google] contacts 55
 [corpus] wrote 184 docs
@@ -121,7 +132,7 @@ The terminal then prints something like:
 
 The last part rebuilds the Moss index `ahead-corpus` from the new corpus.
 
-Gmail limits how fast one user can read mail, so threads are fetched 10 at a time with a one-second pause. If Google still says the quota is exceeded, the script waits and retries on its own (you will see `[google] rate limited, retry ...`). If it gives up, just run it again: calendar data fetched in the last 6 hours is reused instead of downloaded again. Use `pnpm import:google --fresh` to force a full refetch.
+Gmail limits how fast one user can read mail, so threads are fetched 10 at a time with a one-second pause. If Google still says the quota is exceeded, the script waits and retries on its own (you will see `[google] rate limited, retry ...`). If it gives up, just run it again: calendar data fetched in the last 6 hours is reused instead of downloaded again. `CALENDAR_EXCLUDE` still applies to reused data, so you can change it without refetching. Use `pnpm import:google --fresh` to force a full refetch.
 
 The token is saved to `~/.ahead/google-token.json` (outside the repo, owner-only permissions), so later runs skip the browser. Google expires testing-mode tokens after 7 days. When that happens, delete the token file and run the import again.
 
@@ -146,7 +157,7 @@ Local and gitignored:
 Sent to services while the demo runs:
 
 - Moss: building the index uploads the corpus docs (redacted snippets, names, event titles). Queries run locally after that.
-- Factory Droid: reads `calendar.json` and `contacts.json` in the runtime workspace, including contact email addresses, when it stages an edit.
+- Factory Droid: reads `calendar.json` and `contacts.json` in the runtime workspace when it stages an edit. Contacts have no email addresses. Drafts go to `messages/outbox/` and are never sent.
 - Anthropic (Haiku): receives the top search hits for each utterance.
 
 ## Undo

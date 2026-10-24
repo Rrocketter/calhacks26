@@ -3,11 +3,16 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
+  calendarLabel,
   deriveContacts,
+  namesFromTitle,
+  parseExclude,
   redactEmails,
+  selectCalendars,
   shapeEvents,
   shapeThreads,
   toCorpus,
+  type GCalendar,
   type GEvent,
   type GThread,
 } from './google-shape.js';
@@ -23,17 +28,45 @@ const EMAIL_RE = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i;
 const shaped = () => {
   const evs = shapeEvents(events, TZ);
   const { kept, skipped } = shapeThreads(threads, SELF, TZ);
-  const contacts = deriveContacts(events, kept, SELF);
+  const contacts = deriveContacts(evs, kept, SELF);
   return { evs, kept, skipped, contacts, corpus: toCorpus(evs, contacts, kept) };
 };
 
-test('events: seed shape, cancelled dropped, self and resource attendees dropped', () => {
+test('calendars: owner/writer kept, read-only skipped, address names labeled by domain, exclude', () => {
+  const list = fx('calendars.json') as GCalendar[];
+  assert.deepEqual(selectCalendars(list, []), {
+    kept: [
+      { id: 'me@example.com', label: 'primary' },
+      { id: 'me@school.example.edu', label: 'school.example.edu' },
+      { id: 'r1@group.calendar.google.com', label: 'Research' },
+      { id: 'r2@group.calendar.google.com', label: 'Recruiting' },
+    ],
+    readOnly: 2,
+    excluded: [],
+  });
+  const ex = selectCalendars(list, parseExclude(' recruiting, School.Example.edu ,'));
+  assert.deepEqual(ex.kept.map((c) => c.label), ['primary', 'Research']);
+  assert.deepEqual(ex.excluded, ['school.example.edu', 'Recruiting']);
+  assert.equal(calendarLabel({ summary: 'Old', summaryOverride: 'Astro Club' }), 'Astro Club');
+  assert.deepEqual(parseExclude(undefined), []);
+});
+
+test('namesFromTitle: people after "with", separators, stop words', () => {
+  assert.deepEqual(namesFromTitle('Pulsar Project with Hayk & Luka'), ['Hayk', 'Luka']);
+  assert.deepEqual(namesFromTitle('Coffee w/ Esha Telang, Sam and Jo (tentative)'), ['Esha Telang', 'Sam', 'Jo']);
+  assert.deepEqual(namesFromTitle('Sync with the team (weekly)'), []);
+  assert.deepEqual(namesFromTitle('Meet with Team'), []);
+  assert.deepEqual(namesFromTitle('1:1 with Ana - prep'), ['Ana']);
+  assert.deepEqual(namesFromTitle('Weekly NICER CfA Meeting'), []);
+});
+
+test('events: seed shape plus calendar, cancelled and cross-calendar duplicates dropped, self and resource attendees dropped', () => {
   const evs = shapeEvents(events, TZ);
   assert.deepEqual(
     evs.map((e) => e.id),
-    ['g-evt-abc123', 'g-evt-allday_1', 'g-evt-nameless_1'],
+    ['g-evt-abc123', 'g-evt-allday_1', 'g-evt-nameless_1', 'g-evt-pulsar_1', 'g-evt-lunch_1', 'g-evt-team_1'],
   );
-  const [review, allday, nameless] = evs;
+  const [review, allday, nameless, pulsar, lunch, team] = evs;
   assert.deepEqual(review, {
     id: 'g-evt-abc123',
     title: 'Design review with Lena',
@@ -41,7 +74,12 @@ test('events: seed shape, cancelled dropped, self and resource attendees dropped
     end: '2026-10-30T15:00:00-07:00',
     attendees: ['Lena Okafor'],
     location: 'Conference Room B',
+    calendar: 'primary',
   });
+  assert.equal(allday!.calendar, 'Research');
+  assert.deepEqual(pulsar!.attendees, ['Hayk', 'Luka']);
+  assert.deepEqual(lunch!.attendees, ['Lena Okafor']);
+  assert.deepEqual(team!.attendees, []);
   assert.equal(allday!.start, '2026-11-12T00:00:00-08:00');
   assert.equal(allday!.end, '2026-11-13T00:00:00-08:00');
   assert.deepEqual(allday!.attendees, []);
@@ -82,19 +120,15 @@ test('redactEmails: known address to name, unknown to [email], links collapsed',
   assert.equal(redactEmails('"Hugo H" <hugo_haas2@example.com> wrote', known), 'Hugo H wrote');
 });
 
-test('contacts: from attendees and senders, deduped, no self, no noreply, counts in notes', () => {
+test('contacts: attendees, title names, and senders; name only, sources, no self, no noreply', () => {
   const { contacts } = shaped();
-  assert.deepEqual(
-    contacts.map((c) => [c.name, c.email]),
-    [
-      ['Lena Okafor', 'lena.okafor@example.com'],
-      ['Hugo Haas', 'hugo_haas2@example.com'],
-    ],
-  );
-  const lena = contacts[0]!;
-  assert.equal(lena.id, 'g-contact-lena-okafor');
-  assert.equal(lena.phone, '');
-  assert.equal(lena.notes, '1 event, 1 email thread.');
+  assert.deepEqual(contacts, [
+    { id: 'g-contact-lena-okafor', name: 'Lena Okafor', notes: '2 events, 1 email thread.', sources: ['primary', 'gmail'] },
+    { id: 'g-contact-hugo-haas', name: 'Hugo Haas', notes: '1 event.', sources: ['school.example.edu'] },
+    { id: 'g-contact-hayk', name: 'Hayk', notes: '1 event.', sources: ['Research'] },
+    { id: 'g-contact-luka', name: 'Luka', notes: '1 event.', sources: ['Research'] },
+  ]);
+  assert.ok(!EMAIL_RE.test(JSON.stringify(contacts)), 'contacts.json must hold no addresses');
 });
 
 test('corpus: unique ids, string metadata, no email addresses anywhere', () => {
@@ -116,11 +150,13 @@ test('corpus: doc shapes match gen-corpus', () => {
   assert.equal(evt.text, 'Design review with Lena Okafor. Friday, October 30 at 2 PM in Conference Room B. With Lena Okafor.');
   assert.deepEqual(evt.metadata, {
     type: 'calendar', date: '2026-10-30', people: 'Lena Okafor', day: 'friday', time: '2 pm', title: 'Design review with Lena Okafor',
+    calendar: 'primary',
   });
+  assert.equal(byId('g-evt-pulsar_1').text, 'Pulsar Project with Hayk & Luka. Friday, October 30 at 5:30 PM. With Hayk, Luka.');
   assert.ok(byId('g-evt-nameless_1').text.includes('in [link] call me at [email].'));
   const con = byId('g-contact-lena-okafor');
-  assert.equal(con.text, 'Lena Okafor. 1 event, 1 email thread.');
-  assert.deepEqual(con.metadata, { type: 'contact', date: '2026-10-30', people: 'Lena Okafor', title: 'Lena Okafor' });
+  assert.equal(con.text, 'Lena Okafor. 2 events, 1 email thread.');
+  assert.deepEqual(con.metadata, { type: 'contact', date: '2026-11-02', people: 'Lena Okafor', title: 'Lena Okafor' });
   const mail = byId('g-email-t1');
   assert.ok(mail.text.startsWith('Email from Lena Okafor. Subject: Agenda for Thursday. Sent thursday. Hi! Here is'));
   assert.ok(mail.text.includes('Loop in Hugo and [email], doc at [link] thanks.'));
@@ -151,4 +187,31 @@ test('threads: format=metadata (headers + snippet, no body) uses the snippet', (
   const [m] = shapeThreads([meta], SELF, TZ).kept;
   assert.equal(m!.body, "Let's meet at 3 & bring the deck");
   assert.equal(m!.date, '2026-10-23');
+});
+
+test('review fixes: own address on other calendars, empty and address-like names, redacted calendar.json fields, label with address', () => {
+  const evs = shapeEvents(
+    [
+      {
+        id: 'x1',
+        calendar: 'Research',
+        summary: 'Sync re me@example.com notes',
+        location: 'https://zoom.us/j/1 or desk',
+        start: { dateTime: '2026-10-30T09:00:00-07:00' },
+        attendees: [
+          { email: 'ME@example.com', displayName: 'Me Myself' },
+          { email: '12345@example.com' },
+          { email: 'john@corp.com', displayName: 'John (john at corp.com)' },
+        ],
+      },
+    ],
+    TZ,
+    SELF,
+  );
+  assert.deepEqual(evs[0]!.attendees, ['John']);
+  assert.equal(evs[0]!.title, 'Sync re [email] notes');
+  assert.equal(evs[0]!.location, '[link] or desk');
+  assert.equal(calendarLabel({ summary: "a@b.com's cal" }), "[email]'s cal");
+  const noDate: GThread = { id: 'nd', messages: [{ id: 'm', payload: { headers: [{ name: 'Subject', value: 'x' }] } }] };
+  assert.equal(shapeThreads([noDate], SELF, TZ).kept.length, 0);
 });

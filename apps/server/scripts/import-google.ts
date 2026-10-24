@@ -13,7 +13,17 @@ import { google, Auth } from 'googleapis';
 import { REPO_ROOT } from '../src/env.js';
 import { logLatency } from '../src/log.js';
 import { withRetry } from './google-retry.js';
-import { deriveContacts, shapeEvents, shapeThreads, toCorpus, type GEvent, type GThread } from './google-shape.js';
+import {
+  deriveContacts,
+  parseExclude,
+  selectCalendars,
+  shapeEvents,
+  shapeThreads,
+  toCorpus,
+  type GCalendar,
+  type GEvent,
+  type GThread,
+} from './google-shape.js';
 
 const SCOPES = [
   'https://www.googleapis.com/auth/calendar.readonly',
@@ -33,12 +43,19 @@ const BATCH_PAUSE_MS = 1000;
 const CAL_CACHE = path.join(OUT_DIR, '.calendar-partial.json');
 const CAL_CACHE_MAX_AGE = 6 * 60 * 60 * 1000;
 
-type CalCache = { fetchedAt: number; tz: string; items: GEvent[] };
+// Holds every owner/writer calendar, so a changed CALENDAR_EXCLUDE still applies on reuse.
+type CalCache = { v: 2; fetchedAt: number; tz: string; calendars: GCalendar[]; items: GEvent[] };
 
 function readCalCache(): CalCache | undefined {
   if (process.argv.includes('--fresh') || !fs.existsSync(CAL_CACHE)) return undefined;
-  const c = JSON.parse(fs.readFileSync(CAL_CACHE, 'utf8')) as CalCache;
-  return Date.now() - c.fetchedAt < CAL_CACHE_MAX_AGE ? c : undefined;
+  try {
+    const c = JSON.parse(fs.readFileSync(CAL_CACHE, 'utf8')) as CalCache;
+    if (c.v === 2 && Date.now() - c.fetchedAt < CAL_CACHE_MAX_AGE) return c;
+  } catch {
+    // Corrupt or half-written: refetch.
+  }
+  fs.rmSync(CAL_CACHE, { force: true });
+  return undefined;
 }
 
 async function timed<T>(source: string, label: string, fn: () => Promise<T>): Promise<T> {
@@ -50,7 +67,9 @@ async function timed<T>(source: string, label: string, fn: () => Promise<T>): Pr
 
 function saveToken(tokens: Auth.Credentials): void {
   fs.mkdirSync(AHEAD_DIR, { recursive: true, mode: 0o700 });
+  fs.chmodSync(AHEAD_DIR, 0o700);
   fs.writeFileSync(TOKEN_FILE, JSON.stringify(tokens, null, 2) + '\n', { mode: 0o600 });
+  fs.chmodSync(TOKEN_FILE, 0o600);
 }
 
 // Installed-app flow: loopback redirect on a random port, PKCE, state check.
@@ -116,18 +135,35 @@ async function authorize(): Promise<Auth.OAuth2Client> {
     }
   }
   await consent(client);
+  fs.rmSync(CAL_CACHE, { force: true });
   return client;
 }
 
-function fetchEvents(calendar: ReturnType<typeof google.calendar>, tz: string): Promise<GEvent[]> {
+async function fetchCalendars(calendar: ReturnType<typeof google.calendar>): Promise<GCalendar[]> {
+  const out: GCalendar[] = [];
+  let pageToken: string | undefined;
+  do {
+    const { data } = await withRetry(() => calendar.calendarList.list({ maxResults: 250, pageToken }));
+    out.push(...(data.items ?? []));
+    pageToken = data.nextPageToken ?? undefined;
+  } while (pageToken);
+  return out;
+}
+
+function fetchEvents(
+  calendar: ReturnType<typeof google.calendar>,
+  calendarId: string,
+  label: string,
+  tz: string,
+): Promise<GEvent[]> {
   const now = Date.now();
-  return timed('google', 'calendar events', async () => {
+  return timed('google', `calendar events [${label}]`, async () => {
     const out: GEvent[] = [];
     let pageToken: string | undefined;
     do {
       const { data } = await withRetry(() =>
         calendar.events.list({
-          calendarId: 'primary',
+          calendarId,
           timeMin: new Date(now - 30 * DAY).toISOString(),
           timeMax: new Date(now + 60 * DAY).toISOString(),
           singleEvents: true,
@@ -137,7 +173,19 @@ function fetchEvents(calendar: ReturnType<typeof google.calendar>, tz: string): 
           pageToken,
         }),
       );
-      out.push(...(data.items ?? []));
+      // Keep only what google-shape reads: no descriptions or conference data on disk.
+      out.push(
+        ...(data.items ?? []).map((e) => ({
+          id: e.id,
+          status: e.status,
+          summary: e.summary,
+          location: e.location,
+          start: e.start,
+          end: e.end,
+          attendees: e.attendees?.map((a) => ({ email: a.email, displayName: a.displayName, self: a.self, resource: a.resource })),
+          calendar: label,
+        })),
+      );
       pageToken = data.nextPageToken ?? undefined;
     } while (pageToken);
     return out;
@@ -153,19 +201,29 @@ async function main(): Promise<void> {
   const calendar = google.calendar({ version: 'v3', auth });
   const gmail = google.gmail({ version: 'v1', auth });
 
-  const cached = readCalCache();
-  let tz: string;
-  let items: GEvent[];
-  if (cached) {
-    ({ tz, items } = cached);
-    console.log(`[google] calendar reused from earlier run (${items.length} events, --fresh to refetch)`);
+  let cache = readCalCache();
+  if (cache) {
+    console.log(`[google] calendars reused from earlier run (${cache.items.length} events, --fresh to refetch)`);
   } else {
-    tz = (await timed('google', 'calendar tz', () => withRetry(() => calendar.calendars.get({ calendarId: 'primary' }))))
+    const tz = (await timed('google', 'calendar tz', () => withRetry(() => calendar.calendars.get({ calendarId: 'primary' }))))
       .data.timeZone ?? 'UTC';
-    items = await fetchEvents(calendar, tz);
+    const calendars = await timed('google', 'calendar list', () => fetchCalendars(calendar));
+    const items: GEvent[] = [];
+    // Primary first, so an invite on two calendars is tagged with the primary one.
+    const all = selectCalendars(calendars, []).kept.sort((x, y) => +(y.label === 'primary') - +(x.label === 'primary'));
+    for (const c of all) items.push(...(await fetchEvents(calendar, c.id, c.label, tz)));
+    cache = { v: 2, fetchedAt: Date.now(), tz, calendars, items };
     fs.mkdirSync(OUT_DIR, { recursive: true });
-    fs.writeFileSync(CAL_CACHE, JSON.stringify({ fetchedAt: Date.now(), tz, items } satisfies CalCache) + '\n', { mode: 0o600 });
+    fs.writeFileSync(CAL_CACHE, JSON.stringify(cache) + '\n', { mode: 0o600 });
   }
+  const { tz } = cache;
+  const picked = selectCalendars(cache.calendars, parseExclude(process.env.CALENDAR_EXCLUDE));
+  const keep = new Set(picked.kept.map((c) => c.label));
+  const items = cache.items.filter((e) => keep.has(e.calendar ?? ''));
+  console.log(
+    `[google] calendars kept ${picked.kept.length}, read-only skipped ${picked.readOnly}, excluded ${picked.excluded.length}` +
+      (picked.excluded.length ? ` (${picked.excluded.join(', ')})` : ''),
+  );
 
   const self = (await timed('google', 'gmail profile', () => withRetry(() => gmail.users.getProfile({ userId: 'me' }))))
     .data.emailAddress ?? '';
@@ -188,9 +246,9 @@ async function main(): Promise<void> {
     return out;
   });
 
-  const events = shapeEvents(items, tz);
+  const events = shapeEvents(items, tz, self);
   const { kept, skipped } = shapeThreads(threads, self, tz);
-  const contacts = deriveContacts(items, kept, self);
+  const contacts = deriveContacts(events, kept, self);
   const corpus = toCorpus(events, contacts, kept);
 
   fs.mkdirSync(OUT_DIR, { recursive: true });
@@ -199,7 +257,10 @@ async function main(): Promise<void> {
   fs.mkdirSync(path.dirname(CORPUS), { recursive: true });
   fs.writeFileSync(CORPUS, JSON.stringify(corpus, null, 2) + '\n');
 
-  console.log(`[google] events ${events.length} (of ${items.length} fetched)`);
+  for (const c of picked.kept) {
+    console.log(`[google] events [${c.label}] ${events.filter((e) => e.calendar === c.label).length}`);
+  }
+  console.log(`[google] events ${events.length} (of ${items.length} fetched, duplicates and cancelled dropped)`);
   console.log(`[google] threads ${threads.length}, kept ${kept.length}, skipped ${skipped} by subject blocklist`);
   console.log(`[google] contacts ${contacts.length}`);
   console.log(`[corpus] wrote ${corpus.length} docs`);

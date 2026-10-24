@@ -249,6 +249,10 @@ export function generateCorpus(seed = 1): CorpusDoc[] {
 }
 
 function main(): void {
+  if (process.env.IMPORT_GOOGLE === '1') {
+    console.error('[corpus] refusing: IMPORT_GOOGLE=1, corpus.json holds the Google import. Unset it or run pnpm import:google.');
+    process.exit(1);
+  }
   const docs = generateCorpus();
   fs.mkdirSync(path.dirname(OUT), { recursive: true });
   fs.writeFileSync(OUT, JSON.stringify(docs, null, 2) + '\n');

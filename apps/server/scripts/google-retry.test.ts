@@ -57,3 +57,7 @@ test('withRetry: non-quota errors throw at once; gives up after max tries', asyn
   );
   assert.equal(calls, 4);
 });
+
+test('backoffMs: reads Retry-After from a fetch Headers object (gaxios 7)', () => {
+  assert.equal(backoffMs(1, { response: { headers: new Headers({ 'retry-after': '3' }) } }, () => 0), 3000);
+});
