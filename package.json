@@ -1,0 +1,21 @@
+{
+  "name": "ahead",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.34.8",
+  "engines": {
+    "node": ">=20.6"
+  },
+  "scripts": {
+    "build": "pnpm -r build",
+    "lint": "pnpm -r lint",
+    "test": "pnpm -r test",
+    "check:secrets": "node scripts/check-secrets.mjs"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "eslint": "10.13.0",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.72.0"
+  }
+}
