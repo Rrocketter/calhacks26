@@ -17,7 +17,10 @@ export class MockSocket implements Transport {
   private runId = 0;
   private run: Run | null = null;
   private timers = new Set<ReturnType<typeof setTimeout>>();
+  private speculating = false;
   private staged = false;
+  private pendingApply = false;
+  private discarded = false;
   private terminal = false;
 
   constructor(
@@ -55,7 +58,10 @@ export class MockSocket implements Transport {
     const cancelled = new Promise<void>((r) => (cancel = r));
     const run: Run = { id: ++this.runId, cancel, cancelled };
     this.run = run;
+    this.speculating = false;
     this.staged = false;
+    this.pendingApply = false;
+    this.discarded = false;
     this.terminal = false;
     return Promise.race([this.replay(run), cancelled]);
   }
@@ -77,11 +83,11 @@ export class MockSocket implements Transport {
 
     const droid = async () => {
       for await (const e of mockDroidRun(turnId, { withDenied: this.opts.denied })) {
-        if (!live()) return;
+        if (!live() || this.discarded) return;
         let out = e;
         if (e.type === 'droid_event' && (e.kind === 'diff' || e.kind === 'result')) {
           await eager;
-          if (!live()) return;
+          if (!live() || this.discarded) return;
           if (e.kind === 'result' && this.opts.failed) {
             out = { ...e, payload: { ok: false, failed: true, summary: 'droid turn failed after staging' } };
           }
@@ -90,6 +96,7 @@ export class MockSocket implements Transport {
         if (e.type === 'droid_event' && e.kind === 'diff') {
           this.state(run, turnId, 'STAGED');
           this.staged = true;
+          if (this.pendingApply) this.finish(run, turnId, true);
           maybeAutoConfirm();
         }
       }
@@ -109,6 +116,7 @@ export class MockSocket implements Transport {
         }
         if (!speculating && e.belief.confidence >= 0.75 && SPECULATE_INTENTS.includes(e.belief.intent)) {
           speculating = true;
+          this.speculating = true;
           this.state(run, turnId, 'SPECULATING');
           tasks.push(droid());
         }
@@ -135,8 +143,14 @@ export class MockSocket implements Transport {
   }
 
   private finish(run: Run, turnId: string, apply: boolean) {
-    if (run.id !== this.runId || this.terminal || !this.staged) return;
+    if (run.id !== this.runId || this.terminal || !this.speculating) return;
+    // Apply before STAGED commits as soon as the diff is staged.
+    if (apply && !this.staged) {
+      this.pendingApply = true;
+      return;
+    }
     this.terminal = true;
+    if (!apply) this.discarded = true;
     this.state(run, turnId, apply ? 'COMMITTED' : 'ROLLED_BACK');
   }
 
@@ -144,7 +158,11 @@ export class MockSocket implements Transport {
     if (ev.type === 'confirm_action') {
       if (this.run) this.finish(this.run, ev.turnId, ev.apply);
     } else if (ev.type === 'demo_control') {
-      if (ev.action === 'start') void this.play();
+      if (ev.action === 'start') {
+        this.play().catch((err: unknown) =>
+          this.onEvent({ type: 'error', source: 'mock', message: String(err) }),
+        );
+      }
       else if (ev.action === 'stop') this.stop();
     }
   }

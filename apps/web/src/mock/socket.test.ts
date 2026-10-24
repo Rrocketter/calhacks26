@@ -71,6 +71,41 @@ describe('MockSocket', () => {
     expect(states(evs).at(-1)).toBe('ROLLED_BACK');
   });
 
+  it('discard in SPECULATING rolls back and silences later droid events', async () => {
+    const evs: ServerEvent[] = [];
+    const sock = new MockSocket((e) => evs.push(e), { speed: 50, autoConfirmMs: null });
+    const done = sock.play();
+    await until(() => states(evs).includes('SPECULATING'));
+    sock.send({ type: 'confirm_action', turnId: 'demo-1', apply: false });
+    await settle(done);
+    await wait(5000);
+    const at = idx(evs, (e) => e.type === 'state_change' && e.state === 'ROLLED_BACK');
+    expect(at).toBeGreaterThan(-1);
+    expect(states(evs).at(-1)).toBe('ROLLED_BACK');
+    expect(states(evs)).not.toContain('STAGED');
+    expect(evs.slice(at + 1).filter((e) => e.type === 'droid_event')).toEqual([]);
+  });
+
+  it('apply in SPECULATING commits once STAGED', async () => {
+    const evs: ServerEvent[] = [];
+    const sock = new MockSocket((e) => evs.push(e), { speed: 50, autoConfirmMs: null });
+    const done = sock.play();
+    await until(() => states(evs).includes('SPECULATING'));
+    sock.send({ type: 'confirm_action', turnId: 'demo-1', apply: true });
+    await settle(done);
+    expect(states(evs).slice(-2)).toEqual(['STAGED', 'COMMITTED']);
+  });
+
+  it('confirm before SPECULATING is ignored', async () => {
+    const evs: ServerEvent[] = [];
+    const sock = new MockSocket((e) => evs.push(e), { speed: 50, autoConfirmMs: null });
+    const done = sock.play();
+    await until(() => states(evs).includes('LISTENING'));
+    sock.send({ type: 'confirm_action', turnId: 'demo-1', apply: false });
+    await settle(done);
+    expect(states(evs)).toEqual(['LISTENING', 'BELIEF_FORMING', 'SPECULATING', 'STAGED']);
+  });
+
   it('emits at most one terminal state', async () => {
     const evs: ServerEvent[] = [];
     const sock = new MockSocket((e) => evs.push(e), { speed: 50, autoConfirmMs: 5000 });
