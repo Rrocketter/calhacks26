@@ -50,6 +50,9 @@ const ws = new WebSocket(`ws://localhost:${PORT}/ws`);
 const send = (e: ClientEvent) => ws.send(JSON.stringify(e));
 const fixtureTtsOpen = () => [...openCtx.values()].some((t) => t === fixtureTurn);
 
+let mergeDone: (() => void) | null = null;
+const merged = new Promise<void>((r) => (mergeDone = r));
+let mergeError: string | null = null;
 let finish: (() => void) | null = null;
 const finished = new Promise<void>((r) => (finish = r));
 
@@ -156,12 +159,20 @@ function onEvent(e: ServerEvent): void {
       break;
     }
     case 'metric':
+      if (e.source === 'droid' && finalState !== null && e.label === (finalState === 'COMMITTED' ? 'commit' : 'rollback')) {
+        mark('merge', now);
+        mergeDone?.();
+      }
       detail = ` ${e.source} ${e.label} ${e.ms.toFixed(1)}ms`;
       break;
     case 'moss_hits':
       detail = ` "${e.query}"`;
       break;
     case 'error':
+      if (e.source === 'droid' && finalState !== null) {
+        mergeError = e.message;
+        mergeDone?.();
+      }
       detail = ` ${e.source ?? ''} ${e.message}`;
       break;
   }
@@ -193,6 +204,14 @@ ws.on('open', async () => {
   }, DONE_TIMEOUT_MS);
   const poll = setInterval(tick, 200);
   await finished;
+  if (finalState !== null) {
+    const t = setTimeout(() => {
+      console.log('timeout 15000ms waiting for the droid commit/rollback metric');
+      mergeDone?.();
+    }, 15000);
+    await merged;
+    clearTimeout(t);
+  }
   clearTimeout(timer);
   clearInterval(poll);
   ws.close();
@@ -214,6 +233,7 @@ ws.on('open', async () => {
   console.log(`turn_start -> first droid_event: ${gap('turn_start', 'droid')}`);
   console.log(`turn_start -> STAGED: ${gap('turn_start', 'staged')}`);
   console.log(`STAGED -> final: ${gap('staged', 'final')}`);
+  console.log(`${finalState === 'ROLLED_BACK' ? 'rollback' : 'commit'} done ${marks.merge === undefined ? 'n/a' : `+${marks.merge}ms (STAGED -> merge-done ${gap('staged', 'merge')})`}`);
   console.log(`events: ${[...counts].map(([k, v]) => `${k}=${v}`).join(' ')}`);
 
   const utt1 = fixture.includes('utterance-1');
@@ -222,6 +242,8 @@ ws.on('open', async () => {
   if (marks.lock === undefined) problems.push('no state_change SPECULATING');
   if (marks.droid === undefined) problems.push('no droid_event');
   if (!stagedSeen) problems.push('no STAGED');
+  if (mergeError !== null) problems.push(`droid error after final state: ${mergeError}`);
+  else if (marks.merge === undefined) problems.push('no droid commit/rollback metric');
   if (finalState !== want) problems.push(`final state ${finalState ?? 'none'}, wanted ${want}`);
   if (utt1 && !interjected) problems.push('no interject for utterance 1');
   if (finalState === 'COMMITTED' && want === 'COMMITTED') {
