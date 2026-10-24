@@ -10,6 +10,7 @@
     "spike:ink": "node --env-file=../../.env --import tsx scripts/spike-ink.ts",
     "spike:sonic": "node --env-file=../../.env --import tsx scripts/spike-sonic.ts",
     "spike:moss": "MOSS_DISABLE_TELEMETRY=1 node --env-file=../../.env --import tsx scripts/spike-moss.ts",
+    "smoke:sonic-ws": "node --env-file=../../.env --import tsx scripts/smoke-sonic-ws.ts",
     "spike:droid": "node --env-file=../../.env --import tsx scripts/spike-droid.ts"
   },
   "dependencies": {

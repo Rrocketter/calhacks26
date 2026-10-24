@@ -106,12 +106,31 @@ Top hits:
 
 ### WebSocket (what Lane A should use)
 
-- Endpoint: `wss://api.cartesia.ai/tts/websocket?cartesia_version=2026-08-14`.
-- Request: `{model_id, transcript, voice, language:"en", context_id, output_format:{container:"raw", encoding:"pcm_s16le", sample_rate}, continue}`.
-- Responses: `chunk {data: base64}`, `timestamps`, `flush_done`, `done`, `error`.
-- Cancel: `{context_id, cancel:true}` only halts generation that has not started. For barge-in, also drop any incoming chunks for that `context_id` and flush browser playback.
-- Use a new `context_id` per reply.
-- These WebSocket details come from the docs and are untested live.
+Verified live with `pnpm --filter @ahead/server smoke:sonic-ws` (client: `apps/server/src/voice/sonic-client.ts`).
+
+- Endpoint: `wss://api.cartesia.ai/tts/websocket?cartesia_version=2026-08-14`. Auth header `X-API-Key` works (same as Ink).
+- Request that worked: `{model_id:"sonic-3.6", transcript, voice, language:"en", context_id, output_format:{container:"raw", encoding:"pcm_s16le", sample_rate:24000}, continue:false}`. `voice` as a plain id string, no `{id}` wrapper.
+- Responses seen: `chunk {data: base64, context_id, done:false}` and `done {context_id, done:true}`. Each message carries `context_id`, so filter on it. `error` has `message`, `context_id`, `done:true`; not triggered in the smoke run.
+- Use a new `context_id` per reply. One socket handles many sequential contexts.
+- Cancel: `{context_id, cancel:true}`. Docs say it only halts generation that has not started. Observed: cancel sent right after the first chunk of a 5.6 s line; 1 more chunk arrived afterwards (dropped by the client, 0 forwarded), then nothing for 3 s. Still drop by `context_id` client-side and flush browser playback.
+
+Measured (warm socket, first chunk measured from the `speak()` call):
+
+| Run | First chunk | Audio |
+| --- | --- | --- |
+| cold: connect (346.1 ms) + speak | 470.0 ms | 1.60 s ("Got it, I heard you.") |
+| warm demo line #1 | 74.2 ms | 5.76 s |
+| warm demo line #2 | 73.8 ms | 5.60 s |
+| warm demo line #3 | 73.4 ms | 5.60 s |
+| warm turn-end reply #1 | 73.4 ms | 1.60 s |
+| warm turn-end reply #2 | 88.7 ms | 1.52 s |
+| warm turn-end reply #3 | 72.9 ms | 1.52 s |
+
+- Warm p50 73.6 ms (min 72.9, max 88.7), well under the 400 ms target. No latency options needed, so `max_buffer_delay_ms` was not touched.
+- The cold request pays the handshake. Call `SonicClient.connect()` at session start so the first reply is warm.
+- Compare `/tts/bytes`: 369 to 548 ms first byte. The WebSocket is about 5x faster warm.
+- Output check: `var/spikes/sonic-ws.raw` converted to WAV is 1.52 s, peak 29902, RMS 3168 (non-silent, speech-level). No one listened to it in this run.
+- No differences from the docs found, apart from the cancel behavior above.
 
 ## Cartesia Ink 2 (STT)
 
