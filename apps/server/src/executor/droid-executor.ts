@@ -10,6 +10,7 @@ import { logLatency } from '../log.js';
 import { WorkspaceGit } from './git.js';
 import { makeGuard, type Guard } from './guard.js';
 import { correctionFixPrompt, mentionedSuperseded, phase1Prompt, phase2Prompt } from './prompts.js';
+import { targetsFor, type Targets } from './targets.js';
 import { openDroidSession, writeSandboxSettings } from './sandbox.js';
 import { makePermissionHandler, runTurn, type PermissionHandler } from './turn.js';
 import { redact, SpeculationFailed, type DroidLike, type Emit, type Executor, type Phase2Hooks } from './types.js';
@@ -37,6 +38,8 @@ export interface DroidExecutorOptions {
 interface Live {
   turnId: string;
   post1: string | null;
+  /** The event file / contact Phase 1 told Droid to open; Phase 2 edits the same one. */
+  targets: Targets;
 }
 
 interface Running {
@@ -217,13 +220,16 @@ export class DroidExecutor implements Executor {
       const s = this.session;
       if (!s) return this.fail('no droid session');
       const t0 = performance.now();
-      this.live = { turnId, post1: null };
+      const targets = targetsFor(belief, this.opts.workspace, this.opts.now?.() ?? new Date());
+      this.live = { turnId, post1: null, targets };
       try {
         await this.git.prepare(turnId);
       } catch (e) {
         return this.fail('git prepare failed', e);
       }
-      const prompt = phase1Prompt(belief, listFiles(this.opts.workspace));
+      if (targets.event) console.log(`[droid] target ${targets.event.file}`);
+      if (targets.contact) console.log('[droid] target contact');
+      const prompt = phase1Prompt(belief, listFiles(this.opts.workspace), targets);
       // A rollback that arrived during session open or prepare had nothing to interrupt.
       if (gen !== this.rollbackGen) return;
       this.running = { turnId, phase: 'phase1' };
@@ -313,7 +319,7 @@ export class DroidExecutor implements Executor {
         await writes;
         return out;
       };
-      let r = await run('phase2', phase2Prompt(belief, now));
+      let r = await run('phase2', phase2Prompt(belief, now, this.live.targets));
       if (superseded()) return;
       if (r.outcome !== 'success') return this.failPhase2(turnId, `phase2 ${r.outcome}`);
       // Post-check: a draft that still mentions a corrected value is rejected and rerun once.

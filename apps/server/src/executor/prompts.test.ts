@@ -29,7 +29,11 @@ test('every speculative intent: both prompts end with the closing sentence, no p
 
 test('phase1 names the target file and waits', () => {
   const p1 = phase1Prompt(belief('reschedule_event'));
-  assert.match(p1, /calendar\.json/);
+  assert.match(p1, /calendar\/index\.json/);
+  const target = { id: 'e1', title: 'SETI Research Meeting', start: '2026-10-27T13:00:00-07:00', file: 'calendar/e1.json' };
+  assert.match(phase1Prompt(belief('reschedule_event'), [], { event: target }), /Open only this file: Read `calendar\/e1\.json`/);
+  assert.match(phase2Prompt(belief('reschedule_event'), NOW, { event: target }), /Make the edit now in `calendar\/e1\.json`\./);
+  assert.match(phase2Prompt(belief('reschedule_event'), NOW), /Make the edit now in the event file you opened\./);
   assert.match(p1, /Do not edit yet\./);
   assert.match(phase1Prompt(belief('draft_message')), /messages\/outbox\//);
   assert.match(phase1Prompt(belief('draft_message')), /contacts\.json/);

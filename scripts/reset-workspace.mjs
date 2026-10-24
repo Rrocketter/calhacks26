@@ -6,6 +6,7 @@ import { cpSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writ
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { CALENDAR_DIR, readCalendar, writeCalendarDir } from './calendar-layout.mjs';
 
 const MARKER = '.ahead-workspace';
 
@@ -71,15 +72,25 @@ export function canonical(p) {
 }
 
 // With IMPORT_GOOGLE=1, real calendar/contacts from pnpm import:google (gitignored
-// data/google/) replace the seed copies in the workspace. Returns the files copied.
-export const GOOGLE_FILES = ['calendar.json', 'contacts.json'];
+// data/google/) replace the seed copies in the workspace. The calendar comes from
+// data/google/calendar/ or, from an older import, data/google/calendar.json.
 export function missingGoogle(repoRoot) {
-  const f = GOOGLE_FILES.find((x) => !existsSync(path.join(repoRoot, 'data', 'google', x)));
-  return f ? `IMPORT_GOOGLE=1 but data/google/${f} is missing; run: pnpm import:google` : null;
+  const dir = path.join(repoRoot, 'data', 'google');
+  if (!existsSync(path.join(dir, 'contacts.json'))) return 'IMPORT_GOOGLE=1 but data/google/contacts.json is missing; run: pnpm import:google';
+  if (!readCalendar(dir)) return 'IMPORT_GOOGLE=1 but data/google/calendar/ is missing; run: pnpm import:google';
+  return null;
 }
 export function overlayGoogle(repoRoot, target) {
-  for (const f of GOOGLE_FILES) cpSync(path.join(repoRoot, 'data', 'google', f), path.join(target, f));
-  return GOOGLE_FILES;
+  const dir = path.join(repoRoot, 'data', 'google');
+  cpSync(path.join(dir, 'contacts.json'), path.join(target, 'contacts.json'));
+  writeCalendarDir(readCalendar(dir), path.join(target, CALENDAR_DIR));
+  return ['calendar/', 'contacts.json'];
+}
+
+// The seed, with its single calendar.json written as one file per event.
+export function copySeed(seed, target) {
+  cpSync(seed, target, { recursive: true, filter: (src) => src !== path.join(seed, 'calendar.json') });
+  return writeCalendarDir(readCalendar(seed), path.join(target, CALENDAR_DIR));
 }
 
 function main() {
@@ -117,7 +128,7 @@ function main() {
   rmSync(target, { recursive: true, force: true });
   mkdirSync(target, { recursive: true });
   writeFileSync(path.join(target, MARKER), 'created by scripts/reset-workspace.mjs\n');
-  cpSync(seed, target, { recursive: true });
+  copySeed(seed, target);
   if (importGoogle) console.log(`[workspace] google overlay: ${overlayGoogle(repoRoot, target).join(', ')}`);
 
   const env = { ...process.env };

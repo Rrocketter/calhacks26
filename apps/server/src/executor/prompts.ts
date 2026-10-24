@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Belief, Intent } from '@ahead/contracts';
+import type { Targets } from './targets.js';
 
 const SEPARATOR = '\n---PHASE2---\n';
 const TIMEZONE = 'America/Los_Angeles';
@@ -31,10 +32,29 @@ function sections(intent: Intent): [string, string] {
   return [parts[0]!.trim(), parts[1]!.trim()];
 }
 
+// The event Phase 1 opens: the one file the server resolved, else the index to find it in.
+function eventBlock(t: Targets): string {
+  const e = t.event;
+  if (e) {
+    return `The event is ${oneLine(e.title)} on ${oneLine(e.start)}, in \`${e.file}\`. Open only this file: Read \`${e.file}\` and no other file under calendar/. In one step, call Read on it and TodoWrite with your plan together, in the same message.`;
+  }
+  return 'Read `calendar/index.json` (id, title, start and file of every event). Find the event the user means; a repeating event appears once per occurrence, so take the next occurrence on or after today. Then Read only that event\'s file. Note its `id`, `start` and `end`.';
+}
+
+function contactBlock(t: Targets): string {
+  const c = t.contact;
+  if (c) return `The recipient is this contact from contacts.json (do not open contacts.json): ${oneLine(JSON.stringify(c))}`;
+  return 'Read contacts.json and find the person the user means.';
+}
+
 // `files` are workspace-relative paths under files/, listed by the server (Droid can't list dirs).
-export function phase1Prompt(belief: Belief, files: string[] = []): string {
+// `targets` (event file, contact) come from the belief, so Droid opens one small file.
+export function phase1Prompt(belief: Belief, files: string[] = [], targets: Targets = {}): string {
   const list = files.length ? files.map(oneLine).join('\n') : '(no files)';
-  return sections(belief.intent)[0].replace('{{files}}', () => list);
+  return sections(belief.intent)[0]
+    .replace('{{files}}', () => list)
+    .replace('{{event}}', () => eventBlock(targets))
+    .replace('{{contact}}', () => contactBlock(targets));
 }
 
 function todayLine(now: Date): string {
@@ -86,10 +106,13 @@ function correctionLines(belief: Belief): string {
     .join('\n');
 }
 
-export function phase2Prompt(belief: Belief, now: Date = new Date()): string {
+export function phase2Prompt(belief: Belief, now: Date = new Date(), targets: Targets = {}): string {
   const fixes = correctionLines(belief);
   const slots = renderSlots(belief.entities) + (fixes ? `\n\n${fixes}` : '');
-  const body = sections(belief.intent)[1].replace('{{slots}}', () => slots);
+  const file = targets.event ? `\`${targets.event.file}\`` : 'the event file you opened';
+  const body = sections(belief.intent)[1]
+    .replace('{{slots}}', () => slots)
+    .replace('{{event_file}}', () => file);
   return `${todayLine(now)}\n\n${body}`;
 }
 

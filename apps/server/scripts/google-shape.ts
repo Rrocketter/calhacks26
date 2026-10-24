@@ -189,7 +189,7 @@ export function shapeEvents(items: GEvent[], tz: string, selfEmail = ''): Shaped
   };
   return events.map((e) => {
     const real = realAttendees(e, self);
-    // calendar.json is read by Droid, so it gets the same address/link redaction as the corpus.
+    // The event files under calendar/ are read by Droid, so they get the same address/link redaction as the corpus.
     const title = redactEmails(e.summary?.trim() || '(no title)', new Map());
     return {
       id: `g-evt-${e.id}`,

@@ -7,13 +7,16 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DroidMessageType, ToolConfirmationOutcome, type DroidStreamEvent } from '@factory/droid-sdk/node';
 import { parseServerEvent, type Belief, type ServerEvent } from '@ahead/contracts';
+import { readCalendar, writeCalendarDir } from '../../../../scripts/calendar-layout.mjs';
 import { DroidExecutor } from './droid-executor.js';
 import { WorkspaceGit } from './git.js';
 import type { PermissionHandler } from './turn.js';
 import { SpeculationFailed, type DroidLike } from './types.js';
 
 const SEED = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../../workspace-seed');
-const seedCalendar = fs.readFileSync(path.join(SEED, 'calendar.json'), 'utf8');
+// The workspace calendar is one file per event (scripts/calendar-layout.mjs); tests move this one.
+const EVT = 'calendar/evt-priya-q3.json';
+const seedCalendar = JSON.stringify(readCalendar(SEED)!.find((e) => e.id === 'evt-priya-q3'), null, 2) + '\n';
 const dirs: string[] = [];
 test.after(() => {
   for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
@@ -33,7 +36,8 @@ const cleanEnv = () => {
 function makeWorkspace(): { root: string; git: WorkspaceGit; raw: (...a: string[]) => string } {
   const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'ahead-exec-')));
   dirs.push(root);
-  fs.cpSync(SEED, root, { recursive: true });
+  fs.cpSync(SEED, root, { recursive: true, filter: (src) => src !== path.join(SEED, 'calendar.json') });
+  writeCalendarDir(readCalendar(SEED)!, path.join(root, 'calendar'));
   const raw = (...args: string[]) =>
     execFileSync('git', ['-C', root, '-c', 'core.hooksPath=/dev/null', ...args], { env: cleanEnv() }).toString();
   raw('init', '-b', 'main');
@@ -77,7 +81,7 @@ interface Factory {
 }
 
 function moveEvent(root: string): void {
-  const f = path.join(root, 'calendar.json');
+  const f = path.join(root, EVT);
   fs.writeFileSync(
     f,
     fs
@@ -133,7 +137,7 @@ function factory(root: string, opts: { fail?: string } = {}): Factory {
               return;
             }
             if (!isPhase2 && mode !== 'block') {
-              yield call('1', 'Read', { file_path: 'calendar.json' });
+              yield call('1', 'Read', { file_path: EVT });
               yield result('success');
               return;
             }
@@ -165,7 +169,7 @@ function factory(root: string, opts: { fail?: string } = {}): Factory {
             }
             if (mode === 'early' || mode === 'early-changed' || mode === 'early-block' || mode === 'early-fail') {
               moveEvent(root);
-              yield call('2', 'Edit', { file_path: 'calendar.json', old_str: 'a', new_str: 'b' });
+              yield call('2', 'Edit', { file_path: EVT, old_str: 'a', new_str: 'b' });
               f.beforeWriteResult();
               yield toolResult('2', 'Edit');
               await f.afterWrite();
@@ -182,7 +186,7 @@ function factory(root: string, opts: { fail?: string } = {}): Factory {
                 return;
               }
               if (mode === 'early-changed') {
-                const cal = path.join(root, 'calendar.json');
+                const cal = path.join(root, EVT);
                 fs.writeFileSync(cal, fs.readFileSync(cal, 'utf8').replace('2026-11-02T09:00:00-08:00', '2026-11-02T08:30:00-08:00'));
               }
               yield text('Moved it.');
@@ -190,7 +194,7 @@ function factory(root: string, opts: { fail?: string } = {}): Factory {
               return;
             }
             moveEvent(root);
-            yield call('2', 'Edit', { file_path: 'calendar.json', old_str: 'a', new_str: 'b' });
+            yield call('2', 'Edit', { file_path: EVT, old_str: 'a', new_str: 'b' });
             yield text('Moved the Priya review to Monday 9am.');
             yield result('success');
           } finally {
@@ -247,7 +251,7 @@ const metrics = (events: ServerEvent[]): string[] =>
 function assertValid(events: ServerEvent[]): void {
   for (const e of events) assert.notEqual(parseServerEvent(JSON.stringify(e)), null, JSON.stringify(e));
 }
-const calendar = (root: string) => fs.readFileSync(path.join(root, 'calendar.json'), 'utf8');
+const calendar = (root: string) => fs.readFileSync(path.join(root, EVT), 'utf8');
 const specBranches = (raw: (...a: string[]) => string) =>
   raw('for-each-ref', '--format=%(refname:short)', 'refs/heads/spec/').split('\n').filter(Boolean);
 
@@ -265,7 +269,7 @@ test('phase1 -> phase2 -> commit lands the change on main', async () => {
   await exec.phase2('t1', belief());
   const diffs = droid(events, 'diff');
   assert.equal(diffs.length, 1);
-  assert.equal((diffs[0]!.payload as { file: string }).file, 'calendar.json');
+  assert.equal((diffs[0]!.payload as { file: string }).file, EVT);
   assert.match((diffs[0]!.payload as { diff: string }).diff, /2026-11-02/);
   const results = droid(events, 'result');
   assert.equal(results.length, 1);
@@ -646,7 +650,7 @@ test('early diff: emitted when the Edit result returns, before the Result; no du
   await exec.phase2('t1', belief());
   const diffs = droid(events, 'diff');
   assert.equal(diffs.length, 1);
-  assert.equal((diffs[0]!.payload as { file: string }).file, 'calendar.json');
+  assert.equal((diffs[0]!.payload as { file: string }).file, EVT);
   assert.match((diffs[0]!.payload as { diff: string }).diff, /2026-11-02T09:00:00-08:00/);
   assert.ok(events.indexOf(diffs[0]!) < markerAt(events), 'diff before marker');
   const result = droid(events, 'result')[0]!;
@@ -812,7 +816,7 @@ test('a write that lands after staging but before commit is dropped', { timeout:
   const p2 = exec.phase2('t1', belief(), { onStaged: () => void (staged = true) });
   await waitFor(() => staged);
   // The turn keeps editing after the staged diff was shown.
-  const cal = path.join(root, 'calendar.json');
+  const cal = path.join(root, EVT);
   fs.writeFileSync(cal, fs.readFileSync(cal, 'utf8').replace('2026-11-02T09:00:00-08:00', '2026-11-02T08:30:00-08:00'));
   fs.writeFileSync(path.join(root, 'stray.txt'), 'late\n');
   await exec.commit('t1');
@@ -896,4 +900,29 @@ test('post-check: without an accepted correction the same draft stages with no r
   assert.equal(f.sessions[0]!.prompts.length, 2);
   assert.equal(staged, 1);
   assert.ok(!metrics(events).includes('phase2-reject'));
+});
+
+test('phase1 hands Droid the one event file the belief points at, and phase2 edits that file', async () => {
+  const { f, exec } = setup();
+  const b: Belief = { ...belief(), entities: { event: 'Q3 deck review with Priya' }, topHits: [{ docId: 'evt-priya-q3', score: 0.5, snippet: '' }] };
+  await exec.phase1('t1', b);
+  await exec.phase2('t1', b);
+  const [p1, p2] = f.sessions[0]!.prompts;
+  assert.match(p1!, /Open only this file: Read `calendar\/evt-priya-q3\.json` and no other file under calendar\//);
+  assert.doesNotMatch(p1!, /index\.json/);
+  assert.match(p2!, /Make the edit now in `calendar\/evt-priya-q3\.json`\./);
+});
+
+test('phase1 without a resolvable event falls back to calendar/index.json', async () => {
+  const { f, exec } = setup();
+  await exec.phase1('t1', belief());
+  assert.match(f.sessions[0]!.prompts[0]!, /Read `calendar\/index\.json`/);
+});
+
+test('draft phase1 passes the one contact inline instead of contacts.json', async () => {
+  const { f, exec } = setup();
+  await exec.phase1('t1', { ...belief('draft_message'), entities: { person: 'Priya' } });
+  const p1 = f.sessions[0]!.prompts[0]!;
+  assert.match(p1, /The recipient is this contact from contacts\.json \(do not open contacts\.json\): \{.*"name":"Priya Shah"/);
+  assert.doesNotMatch(p1, /Read contacts\.json/);
 });

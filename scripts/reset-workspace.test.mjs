@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { canonical, checkTarget, missingGoogle, overlayGoogle, readEnvValue, resolveWorkspace } from './reset-workspace.mjs';
+import { writeCalendarDir } from './calendar-layout.mjs';
+import { canonical, checkTarget, copySeed, missingGoogle, overlayGoogle, readEnvValue, resolveWorkspace } from './reset-workspace.mjs';
 
 const repoRoot = canonical(path.resolve(import.meta.dirname, '..'));
 const home = canonical(os.homedir());
@@ -82,17 +83,48 @@ test('accepts default and scratch paths', () => {
   assert.equal(check(path.join(scratch, 'ws')), null);
 });
 
-test('google overlay: reports missing files, then copies calendar and contacts over the seed', () => {
+test('google overlay: reports missing files, then writes calendar/ and contacts over the seed', () => {
   const root = mkdtempSync(path.join(os.tmpdir(), 'ahead-repo-'));
   const ws = mkdtempSync(path.join(os.tmpdir(), 'ahead-ws-'));
-  assert.match(missingGoogle(root), /data\/google\/calendar\.json is missing/);
   mkdirSync(path.join(root, 'data', 'google'), { recursive: true });
-  writeFileSync(path.join(root, 'data', 'google', 'calendar.json'), '{"events":[]}\n');
   assert.match(missingGoogle(root), /contacts\.json is missing/);
   writeFileSync(path.join(root, 'data', 'google', 'contacts.json'), '{"contacts":[]}\n');
+  assert.match(missingGoogle(root), /data\/google\/calendar\/ is missing/);
+  const ev = { id: 'g-evt-a_1', title: 'SETI Research Meeting', start: '2026-10-27T13:00:00-07:00', end: '2026-10-27T14:00:00-07:00' };
+  writeCalendarDir([ev], path.join(root, 'data', 'google', 'calendar'));
   assert.equal(missingGoogle(root), null);
-  writeFileSync(path.join(ws, 'calendar.json'), 'seed');
-  assert.deepEqual(overlayGoogle(root, ws), ['calendar.json', 'contacts.json']);
-  assert.equal(readFileSync(path.join(ws, 'calendar.json'), 'utf8'), '{"events":[]}\n');
+  writeCalendarDir([{ id: 'seed-1', title: 'seed', start: '2026-10-30T14:00:00-07:00' }], path.join(ws, 'calendar'));
+  assert.deepEqual(overlayGoogle(root, ws), ['calendar/', 'contacts.json']);
+  assert.deepEqual(readdirSync(path.join(ws, 'calendar')).sort(), ['g-evt-a_1.json', 'index.json']);
+  assert.deepEqual(JSON.parse(readFileSync(path.join(ws, 'calendar', 'g-evt-a_1.json'), 'utf8')), ev);
   assert.equal(readFileSync(path.join(ws, 'contacts.json'), 'utf8'), '{"contacts":[]}\n');
+});
+
+test('google overlay: a single calendar.json from an older import is split into calendar/', () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'ahead-repo-'));
+  const ws = mkdtempSync(path.join(os.tmpdir(), 'ahead-ws-'));
+  mkdirSync(path.join(root, 'data', 'google'), { recursive: true });
+  writeFileSync(path.join(root, 'data', 'google', 'contacts.json'), '{"contacts":[]}\n');
+  const events = [
+    { id: 'b', title: 'Later', start: '2026-10-28T09:00:00-07:00' },
+    { id: 'a/x', title: 'Earlier', start: '2026-10-26T09:00:00-07:00' },
+  ];
+  writeFileSync(path.join(root, 'data', 'google', 'calendar.json'), JSON.stringify({ events }));
+  assert.equal(missingGoogle(root), null);
+  overlayGoogle(root, ws);
+  const index = JSON.parse(readFileSync(path.join(ws, 'calendar', 'index.json'), 'utf8'));
+  assert.deepEqual(index, [
+    { id: 'a/x', title: 'Earlier', start: '2026-10-26T09:00:00-07:00', file: 'calendar/a_x.json' },
+    { id: 'b', title: 'Later', start: '2026-10-28T09:00:00-07:00', file: 'calendar/b.json' },
+  ]);
+  assert.equal(existsSync(path.join(ws, 'calendar.json')), false);
+});
+
+test('copySeed writes the seed calendar as one file per event and no calendar.json', () => {
+  const ws = mkdtempSync(path.join(os.tmpdir(), 'ahead-ws-'));
+  const n = copySeed(path.join(repoRoot, 'workspace-seed'), ws);
+  assert.equal(existsSync(path.join(ws, 'calendar.json')), false);
+  assert.ok(existsSync(path.join(ws, 'calendar', 'evt-priya-q3.json')));
+  assert.equal(readdirSync(path.join(ws, 'calendar')).length, n + 1);
+  assert.ok(existsSync(path.join(ws, 'files', 'seti-slides.pdf')));
 });

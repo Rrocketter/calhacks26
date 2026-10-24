@@ -17,6 +17,7 @@ const NEW_DATE = '2026-11-02';
 const EXPECT_START = '2026-11-02T09:00:00-08:00';
 const EXPECT_END = '2026-11-02T10:00:00-08:00';
 const EVENT_ID = 'evt-priya-q3';
+const EVENT_FILE = 'calendar/evt-priya-q3.json'; // one file per event (scripts/calendar-layout.mjs)
 
 const BELIEF: Belief = BeliefSchema.parse({
   intent: 'reschedule_event',
@@ -95,8 +96,9 @@ async function main(): Promise<void> {
     git('for-each-ref', '--format=%(refname:short)', 'refs/heads/spec/').split('\n').filter(Boolean);
   const branch = (): string => git('rev-parse', '--abbrev-ref', 'HEAD').trim();
   const clean = (): boolean => git('status', '--porcelain').trim() === '';
-  const calendar = (): string => fs.readFileSync(path.join(ws, 'calendar.json'), 'utf8');
-  const seedCalendar = fs.readFileSync(path.join(REPO_ROOT, 'workspace-seed', 'calendar.json'), 'utf8');
+  const calendar = (): string => fs.readFileSync(path.join(ws, EVENT_FILE), 'utf8');
+  const { readCalendar } = await import('../../../scripts/calendar-layout.mjs');
+  const seedCalendar = JSON.stringify(readCalendar(path.join(REPO_ROOT, 'workspace-seed'))!.find((e) => e.id === EVENT_ID), null, 2) + '\n';
 
   const reset = (): void => {
     const t0 = performance.now();
@@ -174,7 +176,7 @@ async function main(): Promise<void> {
     };
     const diffs = events.filter((e): e is DroidEv => e.type === 'droid_event' && e.kind === 'diff');
     // Last one: an early diff may be re-emitted at turn end.
-    const calDiff = diffs.filter((d) => (d.payload as { file?: string }).file === 'calendar.json').at(-1);
+    const calDiff = diffs.filter((d) => (d.payload as { file?: string }).file === EVENT_FILE).at(-1);
     const states = events.flatMap((e) => (e.type === 'state_change' ? [e.state] : []));
     const finalState = states.at(-1);
     // belief-lock-to-diff keeps its old meaning: the turn-end diff, emitted right before `result`.
@@ -185,9 +187,9 @@ async function main(): Promise<void> {
     const fmt = (v: number | null): string => (v === null ? 'n/a' : `${Math.round(v)}ms`);
 
     check(invalid === 0, `all events valid (invalid=${invalid})`);
-    check(calDiff !== undefined, 'diff event for calendar.json');
-    check(calDiff !== undefined && (calDiff.payload as { diff: string }).diff.includes(NEW_DATE), `calendar.json diff contains ${NEW_DATE}`);
-    check(diffs.every((d) => (d.payload as { file?: string }).file === 'calendar.json'), `diff touches only calendar.json (${diffs.length} files)`);
+    check(calDiff !== undefined, `diff event for ${EVENT_FILE}`);
+    check(calDiff !== undefined && (calDiff.payload as { diff: string }).diff.includes(NEW_DATE), `${EVENT_FILE} diff contains ${NEW_DATE}`);
+    check(diffs.every((d) => (d.payload as { file?: string }).file === EVENT_FILE), `diff touches only ${EVENT_FILE} (${diffs.length} files)`);
     check(!events.some((e) => e.type === 'droid_event' && e.denied), 'no denied tool calls');
     check(finalState === (apply ? 'COMMITTED' : 'ROLLED_BACK'), `final state ${finalState ?? 'none'}`);
     check(clean(), 'git status --porcelain empty');
@@ -196,15 +198,14 @@ async function main(): Promise<void> {
     if (apply) {
       let ev: { start?: string; end?: string } | undefined;
       try {
-        const cal = JSON.parse(calendar()) as { events: { id: string; start: string; end: string }[] };
-        ev = cal.events.find((e) => e.id === EVENT_ID);
+        ev = JSON.parse(calendar()) as { start?: string; end?: string };
       } catch {
         ev = undefined;
       }
-      check(calendar().includes(NEW_DATE), `calendar.json on main contains ${NEW_DATE}`);
+      check(calendar().includes(NEW_DATE), `${EVENT_FILE} on main contains ${NEW_DATE}`);
       check(ev?.start === EXPECT_START && ev?.end === EXPECT_END, `${EVENT_ID} start/end = ${ev?.start ?? '?'} / ${ev?.end ?? '?'}`);
     } else {
-      check(calendar() === seedCalendar, 'calendar.json identical to workspace-seed');
+      check(calendar() === seedCalendar, `${EVENT_FILE} identical to workspace-seed`);
     }
 
     const ms = (label: string): string => (label in metrics ? `${Math.round(metrics[label]!)}ms` : 'n/a');

@@ -96,7 +96,7 @@ CALENDAR_EXCLUDE=Recruiting
 The flag gates three things. Without it, nothing changes:
 
 - `pnpm import:google` refuses to run.
-- `pnpm reset:workspace` copies your imported `calendar.json` and `contacts.json` over the seed ones.
+- `pnpm reset:workspace` puts your imported calendar (one file per event under `calendar/`) and `contacts.json` in place of the seed ones. `workspace-seed/files/` stays.
 - The server loads contacts from the import instead of `workspace-seed/`.
 
 ## Step 8. Run the import
@@ -148,7 +148,7 @@ Then start the server as usual. The demo now runs on your data.
 
 Local and gitignored:
 
-- `data/google/calendar.json`
+- `data/google/calendar/` (one JSON file per event plus `index.json`; an older import's `calendar.json` is split on reset)
 - `data/google/contacts.json`
 - `data/corpus/corpus.json`
 
@@ -157,7 +157,7 @@ Local and gitignored:
 Sent to services while the demo runs:
 
 - Moss: building the index uploads the corpus docs (redacted snippets, names, event titles). Queries run locally after that.
-- Factory Droid: reads `calendar.json` and `contacts.json` in the runtime workspace when it stages an edit. Contacts have no email addresses. Drafts go to `messages/outbox/` and are never sent.
+- Factory Droid: opens the one event file under `calendar/` that the server names when it stages an edit; for a draft the server passes the one contact in the prompt. Contacts have no email addresses. Drafts go to `messages/outbox/` and are never sent.
 - Anthropic (Haiku): receives the top search hits for each utterance.
 
 ## Undo

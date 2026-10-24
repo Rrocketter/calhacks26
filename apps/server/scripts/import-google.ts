@@ -12,7 +12,9 @@ import path from 'node:path';
 import { google, Auth } from 'googleapis';
 import { REPO_ROOT } from '../src/env.js';
 import { logLatency } from '../src/log.js';
+import { writeCalendarDir } from '../../../scripts/calendar-layout.mjs';
 import { withRetry } from './google-retry.js';
+import { seedFileDocs } from './seed-files.js';
 import {
   deriveContacts,
   parseExclude,
@@ -249,10 +251,13 @@ async function main(): Promise<void> {
   const events = shapeEvents(items, tz, self);
   const { kept, skipped } = shapeThreads(threads, self, tz);
   const contacts = deriveContacts(events, kept, self);
-  const corpus = toCorpus(events, contacts, kept);
+  // The workspace keeps workspace-seed/files/ under the Google overlay, so the corpus does too.
+  const corpus = [...toCorpus(events, contacts, kept), ...seedFileDocs(path.join(REPO_ROOT, 'workspace-seed'))];
 
   fs.mkdirSync(OUT_DIR, { recursive: true });
-  fs.writeFileSync(path.join(OUT_DIR, 'calendar.json'), JSON.stringify({ events }, null, 2) + '\n');
+  // Same shape as the workspace: one file per event plus calendar/index.json.
+  writeCalendarDir(events, path.join(OUT_DIR, 'calendar'));
+  fs.rmSync(path.join(OUT_DIR, 'calendar.json'), { force: true });
   fs.writeFileSync(path.join(OUT_DIR, 'contacts.json'), JSON.stringify({ contacts }, null, 2) + '\n');
   fs.mkdirSync(path.dirname(CORPUS), { recursive: true });
   fs.writeFileSync(CORPUS, JSON.stringify(corpus, null, 2) + '\n');
