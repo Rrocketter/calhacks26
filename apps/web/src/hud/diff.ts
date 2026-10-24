@@ -34,3 +34,47 @@ export function parseUnifiedDiff(diff: string): DiffLine[] {
   }
   return out;
 }
+
+const WORD = /[A-Za-z0-9]/;
+
+// [start, end) of the part of `a` that differs from `b`, widened to whole words.
+function span(a: string, b: string): [number, number] {
+  if (a === b) return [0, 0];
+  let pre = 0;
+  while (pre < a.length && pre < b.length && a[pre] === b[pre]) pre++;
+  let suf = 0;
+  while (suf < a.length - pre && suf < b.length - pre && a[a.length - 1 - suf] === b[b.length - 1 - suf]) suf++;
+  let start = pre;
+  let end = a.length - suf;
+  while (start > 0 && WORD.test(a[start - 1]!)) start--;
+  while (end < a.length && WORD.test(a[end]!)) end++;
+  return [start, end];
+}
+
+/**
+ * Character spans that changed inside paired lines: in each run of dels followed by the same
+ * number of adds, the k-th del pairs with the k-th add. Keyed by index into `lines`.
+ */
+export function changedSpans(lines: DiffLine[]): Map<number, [number, number]> {
+  const out = new Map<number, [number, number]>();
+  let i = 0;
+  while (i < lines.length) {
+    if (lines[i]!.kind !== 'del') {
+      i++;
+      continue;
+    }
+    const d0 = i;
+    while (i < lines.length && lines[i]!.kind === 'del') i++;
+    const a0 = i;
+    while (i < lines.length && lines[i]!.kind === 'add') i++;
+    const n = a0 - d0;
+    if (i - a0 !== n) continue;
+    for (let k = 0; k < n; k++) {
+      const d = lines[d0 + k]!.text;
+      const a = lines[a0 + k]!.text;
+      out.set(d0 + k, span(d, a));
+      out.set(a0 + k, span(a, d));
+    }
+  }
+  return out;
+}

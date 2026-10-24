@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseUnifiedDiff } from './diff';
+import { changedSpans, parseUnifiedDiff } from './diff';
 
 // Copied from packages/contracts/mocks/droid.ts (DIFF is not exported).
 const DIFF = `diff --git a/calendar.json b/calendar.json
@@ -119,5 +119,26 @@ describe('parseUnifiedDiff', () => {
       ['del', 1, null, 'a'],
       ['add', null, 1, 'b'],
     ]);
+  });
+});
+
+describe('changedSpans', () => {
+  it('marks only the differing middle of paired del/add lines', () => {
+    const lines = parseUnifiedDiff(DIFF);
+    const spans = changedSpans(lines);
+    const del = lines.findIndex((l) => l.kind === 'del');
+    const add = lines.findIndex((l) => l.kind === 'add');
+    const d = lines[del]!.text;
+    const a = lines[add]!.text;
+    const [ds, de] = spans.get(del)!;
+    const [as, ae] = spans.get(add)!;
+    expect(d.slice(ds, de)).toBe('10-30T14:00:00-07');
+    expect(a.slice(as, ae)).toBe('11-02T09:00:00-08');
+    expect(spans.has(lines.findIndex((l) => l.kind === 'ctx'))).toBe(false);
+  });
+
+  it('leaves unpaired adds whole', () => {
+    const lines = parseUnifiedDiff('@@ -1,1 +1,2 @@\n a\n+b\n');
+    expect(changedSpans(lines).size).toBe(0);
   });
 });
