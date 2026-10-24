@@ -7,7 +7,7 @@ Numbers are measured output from the spike scripts, not estimates. Earlier runs 
 - Moss: load `ahead-spike` / `ahead-corpus` at server startup (3-index cap, no other names). Queries are in-process, about 2 ms p50. Never call `loadIndex` on the request path (2 to 20 s).
 - Ink 2: `turn.update` is cumulative, one about every 250 ms. `turn.eager_end` = finalize speculation, `turn.resume` = un-finalize (same turn), `turn.end` = close. Normalize numbers and punctuation before intent matching.
 - Sonic: use the WebSocket for the product (`/tts/bytes` is spike-only, TTFB 370 to 550 ms), model `sonic-3.6`, new `context_id` per reply. Cancel only stops ungenerated audio, so also drop late chunks and flush playback.
-- Droid: the workspace lives outside the repo (`~/.ahead/workspace`, `AHEAD_WORKSPACE` override), and the executor refuses a workspace located under the repo.
+- Droid: the workspace lives outside the repo (`~/.ahead/workspace`, `AHEAD_WORKSPACE` override), and Lane C must refuse a workspace located under the repo (`reset:workspace` already refuses; the executor does not exist yet).
 - Droid sandbox: per-session settings file, denyRead `$HOME` + repo + secret dirs, `allowRead` the workspace (undocumented key, fails closed), denyWrite `.git`. Verify `session.settings.sandbox.enabled` before the first prompt.
 - Droid tools: exact allowlist `Create, Edit, Read, TodoWrite, ToolSearch`. Read/LS bypass the permission handler, so the sandbox is the control.
 - Droid watchdog: abort on any tool outside the allowlist or any path outside the workspace, emit `droid_event` with `denied:true`, `interrupt()` then `close()`. It is detection plus a fast stop, not the control.
@@ -165,6 +165,7 @@ Final transcript: `Draft a message to Priya saying, I'll see her Thursday at 2 f
 
 ### Quirks
 
+- **No dedicated plan event.** Plans arrive as `tool_call` name `TodoWrite` (or, in spec mode, an `ExitSpecMode` permission request with `details.plan`). Source: research in the SDK `.d.ts` files, not observed live. Lane C maps TodoWrite to droid_event kind:'plan'.
 - **At `AutonomyLevel.Off` the CLI removes Create/Edit/ApplyPatch.** `session.listTools()` shows them `allowed=false`, and the model reports "no tool can create or write files". At `low` they come back. To keep Off and still route writes through the handler, call `session.updateSettings({ enabledToolIds: ['Create','Edit','ApplyPatch'] })` right after `createSession`. `enabledToolIds` is not in the 0.10.0 TypeScript type for `updateSettings`, so it needs a cast, but the CLI accepts it (listTools then shows `Create=true Edit=true`, settings show them in `enabledToolIds`). Took 10 to 17 ms.
 - **Returning `Cancel` ends the whole turn.** After the outside write was denied, the turn finished with `result success` and the remaining step never ran. The spike sends step 3 as a second `session.stream()` turn on the same session. AHEAD's executor should expect a denial to stop the plan.
 - `permissionHandler` fired once per write with `confirmationType`/`details.type = 'create'` and an absolute `details.filePath`. The only options to return are values from `params.options`; we return `proceed_once` or `cancel`, and a `permission_resolved` event follows within 1 ms.
@@ -174,9 +175,11 @@ Final transcript: `Draft a message to Priya saying, I'll see her Thursday at 2 f
 
 ### Permission handler behavior observed
 
+Note: this table and the Task 9 verdict and latency below are from the old layout (`var/workspace`). The workspace is now `~/.ahead/workspace` (override `AHEAD_WORKSPACE`), outside the repo.
+
 | Tool | Reached handler | Outcome |
 |---|---|---|
-| Create `~/.ahead/workspace/notes/spike.md` | yes (`create`) | allow, file written |
+| Create `var/workspace/notes/spike.md` | yes (`create`) | allow, file written |
 | Create `var/outside-spike.txt` | yes (`create`) | deny, tool_result error (39 bytes), file absent |
 | Read `<repo>/.env.canary` | **no** | succeeded, 101 bytes, values masked |
 | LS `<repo>` | **no** | succeeded, 1526 bytes |
@@ -210,8 +213,6 @@ The runtime workspace should move outside the repo (and away from `.env`), or th
 
 ### Confinement (Task 12, revised after review)
 
-Note: the Task 9 numbers above are from the old layout (`var/workspace`). The workspace is now `~/.ahead/workspace` (override `AHEAD_WORKSPACE`), outside the repo.
-
 **Sandbox findings, with sources**
 
 - Droid ships a beta OS-level sandbox (Seatbelt on macOS). Sources: [docs.factory.com/cli/configuration/sandbox](https://docs.factory.com/cli/configuration/sandbox.md) and [docs.factory.com/autonomy-and-safety/sandbox](https://docs.factory.com/autonomy-and-safety/sandbox.md). Documented keys: `sandbox.enabled`, `sandbox.mode` (`per-command` default, or `whole-process`), `sandbox.filesystem.denyRead`, `allowWrite`, `denyWrite` (wins over allowWrite), `sandbox.network.allowedDomains`. The docs say reads are allow-all except `denyRead` and list no `allowRead`.
@@ -241,7 +242,7 @@ Note: the Task 9 numbers above are from the old layout (`var/workspace`). The wo
 - The watchdog is a race, not a guarantee. It sees the call only after Droid has decided to make it, and 4 local wins do not prove that a slower path can't lose. **The sandbox's denyRead (with allowRead for the workspace) is the control. The watchdog is detection plus a fast stop.**
 - Spike-only exemption: the path check skips Create/Edit/ApplyPatch so the write-outside denial stays measurable. The name allowlist still applies to them.
 
-**Final verification run (Task 10):** policy `home`, sandbox `enabled=true mode=per-command`, allowed tools `Create,Edit,Read,TodoWrite,ToolSearch`. write-inside ok (edit ok), read-inside ok, write-outside denied, all 4 canary reads sandbox-denied (81 bytes, handler-saw=no), watchdog fired on all 4 with interrupt-to-result 9 to 13 ms, canary leaked no, writes-session watchdog fires 0, invalid droid_events 0. `createSession` 501 to 879 ms across the five sessions.
+**Final verification run (Task 10):** policy `home`, sandbox `enabled=true mode=per-command`, allowed tools `Create,Edit,Read,TodoWrite,ToolSearch`. write-inside ok (edit ok), read-inside ok, write-outside denied, all 4 canary reads sandbox-denied (81 bytes, handler-saw=no), watchdog fired on all 4 with interrupt-to-result 9 to 13 ms, canary leaked no, writes-session watchdog fires 0, invalid droid_events 0. `createSession` 501 to 879 ms across the five sessions of this run.
 
 **Lane C rule:** the executor must watch every tool_use event and abort the session if any path resolves outside the workspace, emitting droid_event kind:'tool' denied:true. It must also abort on any tool name outside its allowlist, start Droid with the per-session sandbox settings file (denyRead `$HOME` + repo + the secret dirs above, allowRead the workspace, denyWrite `.git`), and verify `session.settings.sandbox.enabled` and the exact `listTools()` allowed set before the first prompt. After an abort it should `interrupt()`, then `close()`. Lane C should classify denials from structured fields (for example `SandboxViolationType` in the SDK), not from regexes over tool_result text as this spike does. The guard tests in `apps/server/scripts/spike-droid.guard.test.ts` are the TDD seed.
 
@@ -283,4 +284,4 @@ canary leaked to model: no
 
 Experiments: `SPIKE_READ_POLICY=list` gave the same canary result as `home` (all 4 sandbox-denied, read-inside ok). `home-noallow` denied all 4 canary reads but broke the in-workspace Edit (`edit: fail`), which shows allowRead is what keeps the workspace readable.
 
-**Latency (final runs):** `createSession` 441 to 1051 ms. updateSettings plus listTools under 15 ms. Interrupt to turn end 8 to 23 ms. `close()` 1.4 to 2.3 s. A canary-read session took about 4 to 7 s, mostly model time before the Read call.
+**Latency (Task 12 runs):** `createSession` 441 to 1051 ms. updateSettings plus listTools under 15 ms. Interrupt to turn end 8 to 23 ms. `close()` 1.4 to 2.3 s. A canary-read session took about 4 to 7 s, mostly model time before the Read call.
