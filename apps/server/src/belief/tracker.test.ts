@@ -127,9 +127,9 @@ test('every emitted event parses with parseServerEvent', async () => {
   const { tracker, events } = setup({ llm, retriever });
   await tracker.onUpdate('t1', 'draft');
   await tracker.onUpdate('t1', 'draft a message to Priya on Thursday');
+  // calls 0 ('draft') and 1 (new entities) are both in flight
   llm.resolve(0, { intent: 'draft_message', entities: { person: 'Priya' }, confidence: 0.9 });
-  await tracker.idle();
-  llm.pending.slice(1).forEach((_, i) => llm.resolve(i + 1, { intent: 'draft_message' }));
+  llm.resolve(1, { intent: 'draft_message', entities: { person: 'Priya' }, confidence: 0.9 });
   await tracker.idle();
   assert.ok(events.length > 0);
   for (const ev of events) {
@@ -207,49 +207,94 @@ test('locks draft_message + Priya when llm agrees and moss supports person', asy
   assert.equal(ofType(events, 'belief_update').length, 2);
 });
 
-test('llm called every Nth update and on new entity, never concurrently', async () => {
+test('first changed partial triggers an llm call', async () => {
   const llm = new FakeLlm();
   const { tracker } = setup({ llm });
   await tracker.onUpdate('t1', 'draft'); // 1st changed update, no entity
-  assert.equal(llm.calls.length, 0);
-  await tracker.onUpdate('t1', 'draft a'); // 2nd -> call
   assert.equal(llm.calls.length, 1);
-  assert.equal(llm.calls[0]!.partial, 'draft a');
-  await tracker.onUpdate('t1', 'draft a message to priya'); // new entity, but in flight
-  await tracker.onUpdate('t1', 'draft a message to priya saying'); // 4th, in flight
-  assert.equal(llm.calls.length, 1);
+  assert.equal(llm.calls[0]!.partial, 'draft');
+});
+
+test('llm called on the first, every Nth update and on new entity, at most 2 in flight', async () => {
+  const llm = new FakeLlm();
+  const { tracker } = setup({ llm });
+  await tracker.onUpdate('t1', 'draft'); // 1st -> call 0
+  await tracker.onUpdate('t1', 'draft a'); // 2nd (every N) -> call 1, 2 in flight
+  assert.equal(llm.calls.length, 2);
+  assert.equal(llm.calls[1]!.partial, 'draft a');
+  await tracker.onUpdate('t1', 'draft a message to priya'); // new entity, at the cap
+  await tracker.onUpdate('t1', 'draft a message to priya saying'); // 4th, at the cap
+  assert.equal(llm.calls.length, 2);
   llm.resolve(0, { intent: 'draft_message', confidence: 0.5 });
   await tick();
   // exactly one follow-up call, with the latest text
-  assert.equal(llm.calls.length, 2);
-  assert.equal(llm.calls[1]!.partial, 'draft a message to priya saying');
-  llm.resolve(1, { intent: 'draft_message', confidence: 0.5 });
-  await tracker.idle();
-  assert.equal(llm.calls.length, 2);
-
-  await tracker.onUpdate('t1', 'draft a message to priya saying hi'); // 5th, no new entity
-  assert.equal(llm.calls.length, 2);
-  await tracker.onUpdate('t1', 'draft a message to priya saying hi thursday'); // new entity
   assert.equal(llm.calls.length, 3);
+  assert.equal(llm.calls[2]!.partial, 'draft a message to priya saying');
+  llm.resolve(1, { intent: 'draft_message', confidence: 0.5 });
   llm.resolve(2, { intent: 'draft_message', confidence: 0.5 });
   await tracker.idle();
-  assert.equal(llm.maxInFlight, 1);
+  assert.equal(llm.calls.length, 3);
+
+  await tracker.onUpdate('t1', 'draft a message to priya saying hi'); // 5th, no new entity
+  assert.equal(llm.calls.length, 3);
+  await tracker.onUpdate('t1', 'draft a message to priya saying hi thursday'); // new entity
+  assert.equal(llm.calls.length, 4);
+  llm.resolve(3, { intent: 'draft_message', confidence: 0.5 });
+  await tracker.idle();
+  assert.equal(llm.maxInFlight, 2);
+});
+
+test('never more than 2 llm calls in flight under a burst of partials', async () => {
+  const llm = new FakeLlm();
+  const { tracker } = setup({ llm });
+  const words = 'draft a message to priya saying i will see her thursday at 2 for the q3 deck'.split(' ');
+  for (let i = 1; i <= words.length; i++) await tracker.onUpdate('t1', words.slice(0, i).join(' '));
+  assert.equal(llm.inFlight, 2);
+  assert.equal(llm.calls.length, 2);
+  // resolve in completion order until drained; follow-ups collapse into one at a time per free slot
+  for (let i = 0; i < llm.calls.length; i++) {
+    llm.resolve(i, { intent: 'draft_message', confidence: 0.5 });
+    await tick();
+    assert.ok(llm.inFlight <= 2);
+  }
+  await tracker.idle();
+  assert.equal(llm.maxInFlight, 2);
+  assert.equal(llm.calls.length, 3, 'one collapsed follow-up');
+});
+
+test('out-of-order llm result (older seq resolves after newer) is dropped', async () => {
+  const llm = new FakeLlm();
+  const { tracker, events } = setup({ llm });
+  await tracker.onUpdate('t1', 'draft'); // call 0 (seq 1)
+  await tracker.onUpdate('t1', 'draft a message to priya'); // call 1 (seq 2), concurrent
+  assert.equal(llm.calls.length, 2);
+  llm.resolve(1, { intent: 'draft_message', entities: { person: 'Priya' }, confidence: 0.9 }, 222);
+  await tick();
+  assert.equal(tracker.current('t1')!.intent, 'draft_message');
+  const n = ofType(events, 'belief_update').length;
+  llm.resolve(0, { intent: 'find_file', confidence: 0.99 }, 111); // older, arrives late
+  await tracker.idle();
+  const b = tracker.current('t1')!;
+  assert.equal(b.intent, 'draft_message');
+  assert.equal(b.latencyMs.llm, 222);
+  assert.equal(ofType(events, 'belief_update').length, n, 'nothing emitted for the stale result');
 });
 
 test('stale llm result is dropped', async () => {
-  // Calls never overlap within a turn (see the previous test), so the newest applied result
-  // always comes from the newest partial asked about. The older call's result applies first,
-  // then the follow-up (latest text) replaces it and nothing older is applied afterwards.
+  // In-order results apply; the follow-up (latest text) replaces them and nothing older is
+  // applied afterwards. Out-of-order results are covered by the previous test.
   const llm = new FakeLlm();
   const { tracker, events } = setup({ llm });
-  await tracker.onUpdate('t1', 'draft');
-  await tracker.onUpdate('t1', 'draft a'); // call 0
-  await tracker.onUpdate('t1', 'draft a message to priya'); // queued behind call 0
-  llm.resolve(0, { intent: 'find_file', confidence: 0.3 }, 111);
+  await tracker.onUpdate('t1', 'draft'); // call 0
+  await tracker.onUpdate('t1', 'draft a'); // call 1 (2 in flight)
+  await tracker.onUpdate('t1', 'draft a message to priya'); // queued behind the cap
+  llm.resolve(0, { intent: 'unknown', confidence: 0.1 }, 50);
+  await tick();
+  llm.resolve(1, { intent: 'find_file', confidence: 0.3 }, 111);
   await tick();
   assert.equal(tracker.current('t1')!.intent, 'find_file');
-  assert.equal(llm.calls[1]!.partial, 'draft a message to priya');
-  llm.resolve(1, { intent: 'draft_message', entities: { person: 'Priya' }, confidence: 0.9 }, 222);
+  assert.equal(llm.calls[2]!.partial, 'draft a message to priya');
+  llm.resolve(2, { intent: 'draft_message', entities: { person: 'Priya' }, confidence: 0.9 }, 222);
   await tracker.idle();
   const b = tracker.current('t1')!;
   assert.equal(b.intent, 'draft_message');
@@ -264,9 +309,10 @@ test('llm failure keeps moss loop running', async () => {
   await tracker.onUpdate('t1', 'draft');
   await tracker.onUpdate('t1', 'draft a');
   llm.pending[0]!.reject(new Error('overloaded'));
+  llm.pending[1]!.reject(new Error('overloaded'));
   await tracker.idle();
   const errors = ofType(events, 'error');
-  assert.equal(errors.length, 1);
+  assert.equal(errors.length, 2);
   assert.equal(errors[0]!.source, 'llm');
   assert.match(errors[0]!.message, /overloaded/);
   const before = ofType(events, 'belief_update').length;
@@ -533,7 +579,8 @@ test('eager end finalizes and resume un-finalizes', async () => {
   assert.equal(tracker.isFinalized('t1'), false);
   await tracker.onEagerEnd('t1', 'draft a message to priya');
   assert.equal(tracker.isFinalized('t1'), true);
-  // the eager-end text was processed and its llm call applied before finalizing
+  // the eager-end text was processed; its llm call applies without blocking the eager end
+  await tracker.idle();
   const b = tracker.current('t1')!;
   assert.equal(b.intent, 'draft_message');
   assert.equal(b.entities.person, 'Priya Shah');
@@ -592,22 +639,23 @@ test('turn end passes final flag, final text and topHits, after queued updates',
 test('late streaming result after the final call is dropped', async () => {
   const llm = new FakeLlm();
   const { tracker, events } = setup({ llm });
-  await tracker.onUpdate('t1', 'draft');
-  await tracker.onUpdate('t1', 'draft a'); // streaming call 0 in flight
-  assert.equal(llm.calls.length, 1);
+  await tracker.onUpdate('t1', 'draft'); // streaming call 0
+  await tracker.onUpdate('t1', 'draft a'); // streaming call 1, both in flight
+  assert.equal(llm.calls.length, 2);
   const p = tracker.onTurnEnd('t1', 'draft a message to priya');
   await tick();
-  assert.equal(llm.calls.length, 2);
-  assert.equal(llm.calls[1]!.final, true);
-  llm.resolve(1, LOCKED_DRAFT, 222);
+  assert.equal(llm.calls.length, 3);
+  assert.equal(llm.calls[2]!.final, true);
+  llm.resolve(2, LOCKED_DRAFT, 222);
   const b = await p;
   assert.equal(b.intent, 'draft_message');
   const n = events.length;
-  llm.resolve(0, { intent: 'find_file', confidence: 0.99 }, 111); // late streaming result
+  llm.resolve(0, { intent: 'find_file', confidence: 0.99 }, 111); // late streaming results
+  llm.resolve(1, { intent: 'find_file', confidence: 0.99 }, 111);
   await tracker.idle();
   assert.equal(events.length, n, 'nothing emitted for the late result');
   assert.equal(ofType(events, 'belief_update').at(-1)!.belief.intent, 'draft_message');
-  assert.equal(llm.calls.length, 2, 'no follow-up call after turn end');
+  assert.equal(llm.calls.length, 3, 'no follow-up call after turn end');
 });
 
 test('turn end llm failure returns the last belief', async () => {
@@ -684,15 +732,76 @@ test('updates and eager end queued after turn end are ignored', async () => {
 test('duplicate turn end makes one llm call', async () => {
   const llm = new FakeLlm();
   const { tracker, events } = setup({ llm });
-  await tracker.onUpdate('t1', 'draft');
+  await tracker.onUpdate('t1', 'draft'); // streaming call 0 (first partial)
   const p1 = tracker.onTurnEnd('t1', 'draft a');
   const p2 = tracker.onTurnEnd('t1', 'draft a');
   await tick();
-  assert.equal(llm.calls.length, 1);
-  llm.resolve(0, LOCKED_DRAFT);
+  const finals = () => llm.calls.filter((c) => c.final === true).length;
+  assert.equal(finals(), 1);
+  llm.resolve(1, LOCKED_DRAFT);
   const [b1, b2] = await Promise.all([p1, p2]);
+  llm.resolve(0, LOCKED_DRAFT); // late streaming result, dropped
   await tracker.idle();
-  assert.equal(llm.calls.length, 1);
+  assert.equal(finals(), 1);
+  assert.equal(llm.calls.length, 2);
   assert.deepEqual(b2, b1);
-  assert.equal(ofType(events, 'belief_update').length, 2); // one streaming, one final
+  assert.equal(ofType(events, 'belief_update').length, 2); // one streaming (moss), one final
+});
+
+// ---- Task 6 fixes: finalized blocks interject, eager end does not wait, fast day/time win ----
+
+test('no interject while finalized; resume re-enables it', async () => {
+  const llm = new FakeLlm();
+  const retriever = new SameHitsRetriever([PRIYA_EVT, PRIYA_CONTACT]);
+  const { tracker, events } = setup({ llm, retriever });
+  const text = 'draft a message to priya saying i will see her thursday';
+  await tracker.onUpdate('t1', 'draft a message to priya'); // call 0
+  await tracker.onEagerEnd('t1', text); // call 1 on the eager text; turn finalized
+  assert.equal(tracker.isFinalized('t1'), true);
+  llm.resolve(0, LOCKED_DRAFT); // lock lands while finalized
+  await tick();
+  assert.equal(tracker.isLocked('t1'), true);
+  assert.equal(ofType(events, 'interject').length, 0, 'no interject while finalized');
+
+  tracker.onResume('t1');
+  assert.equal(tracker.isFinalized('t1'), false);
+  llm.resolve(1, LOCKED_DRAFT); // next rebuild after resume may interject
+  await tracker.idle();
+  const ij = ofType(events, 'interject');
+  assert.equal(ij.length, 1);
+  assert.equal(ij[0]!.text, DEMO_TEXT);
+});
+
+test('eager end resolves while an llm call is still pending', async () => {
+  const llm = new FakeLlm(); // never resolves on its own
+  const { tracker } = setup({ llm });
+  await tracker.onUpdate('t1', 'draft a message to priya'); // call 0 pending
+  const resolved = await Promise.race([
+    tracker.onEagerEnd('t1', 'draft a message to priya saying hi').then(() => true),
+    new Promise<boolean>((r) => setTimeout(() => r(false), 50)),
+  ]);
+  assert.equal(resolved, true, 'onEagerEnd did not wait for the llm');
+  assert.equal(tracker.isFinalized('t1'), true);
+  assert.ok(llm.inFlight >= 1);
+});
+
+test('fast entities win over llm entities for day and time', async () => {
+  const llm = new InstantLlm({
+    ...LOCKED_DRAFT,
+    entities: { person: 'Priya', day: 'Thursday', time: 'Thursday at 2', topic: 'Q3 deck' },
+  });
+  const { tracker } = setup({ llm });
+  await tracker.onUpdate('t1', 'draft a message to priya saying i will see her thursday at 2');
+  await tracker.idle();
+  const e = tracker.current('t1')!.entities;
+  assert.equal(e.day, 'thursday');
+  assert.equal(e.time, '2');
+  assert.equal(e.topic, 'Q3 deck', 'other llm entities still apply');
+
+  // without a fast-path value, the llm value is used
+  const llm2 = new InstantLlm({ ...LOCKED_DRAFT, entities: { person: 'Priya', time: 'noon' } });
+  const b = setup({ llm: llm2 });
+  await b.tracker.onUpdate('t1', 'draft a message to priya');
+  await b.tracker.idle();
+  assert.equal(b.tracker.current('t1')!.entities.time, 'noon');
 });

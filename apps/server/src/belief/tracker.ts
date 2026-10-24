@@ -25,7 +25,7 @@ type TurnState = {
   mossMs: number;
   llmResult?: IntentResult;
   llmMs?: number;
-  llmInFlight: boolean;
+  llmInFlight: number;
   llmPending: boolean;
   llmEntitiesAtLastCall: FastEntities;
   nextSeq: number;
@@ -129,21 +129,24 @@ export class BeliefTracker {
     return st.chain;
   }
 
-  /** Process the eager-end text, wait for in-flight llm calls, then mark the turn finalized. */
+  /**
+   * Process the eager-end text, then mark the turn finalized. Does not wait for in-flight llm
+   * calls: their results still update the belief (never interject while finalized), and the
+   * turn-end seq bump drops any that land after onTurnEnd starts.
+   */
   onEagerEnd(turnId: string, text: string): Promise<void> {
     const st = this.getOrCreate(turnId);
     const gen = st.resumeGen;
     void this.onUpdate(turnId, text);
-    const step = st.chain.then(async () => {
+    const step = st.chain.then(() => {
       if (this.isEnded(turnId, st)) return;
-      await this.idle();
       if (st.resumeGen === gen && this.turns.get(turnId) === st) st.finalized = true;
     });
     st.chain = step;
     return step;
   }
 
-  /** The user kept talking: clear finalized only. Unknown turns are ignored. */
+  /** The user kept talking: clear finalized only (re-enables interject). Unknown turns are ignored. */
   onResume(turnId: string): void {
     const st = this.turns.get(turnId);
     if (!st) return;
@@ -210,7 +213,7 @@ export class BeliefTracker {
         topHits: [],
         mossSupport: 0,
         mossMs: 0,
-        llmInFlight: false,
+        llmInFlight: 0,
         llmPending: false,
         llmEntitiesAtLastCall: {},
         nextSeq: 1,
@@ -283,13 +286,15 @@ export class BeliefTracker {
 
     this.rebuild(turnId, st);
 
-    // 3. LLM trigger
+    // 3. LLM trigger: first changed partial, every Nth, or a new entity. Up to
+    // MAX_LLM_IN_FLIGHT calls run at once; the seq guard drops out-of-order results.
+    const first = st.changedUpdates === 1;
     const everyN = st.changedUpdates % this.cfg.LLM_EVERY_N_UPDATES === 0;
     const newEntity = (Object.keys(fast) as (keyof FastEntities)[]).some(
       (k) => fast[k] !== st.llmEntitiesAtLastCall[k],
     );
-    if ((everyN || newEntity) && !st.ending) {
-      if (st.llmInFlight) st.llmPending = true;
+    if ((first || everyN || newEntity) && !st.ending) {
+      if (st.llmInFlight >= this.cfg.MAX_LLM_IN_FLIGHT) st.llmPending = true;
       else this.startLlm(turnId, st);
     }
   }
@@ -330,7 +335,7 @@ export class BeliefTracker {
 
   private startLlm(turnId: string, st: TurnState): void {
     const seq = st.nextSeq++;
-    st.llmInFlight = true;
+    st.llmInFlight++;
     st.llmPending = false;
     st.llmEntitiesAtLastCall = { ...st.fast };
     const p = this.deps.llm
@@ -355,7 +360,7 @@ export class BeliefTracker {
       )
       .finally(() => {
         this.inFlight.delete(p);
-        st.llmInFlight = false;
+        st.llmInFlight--;
         if (st.llmPending && !st.ending && this.turns.get(turnId) === st) {
           this.startLlm(turnId, st);
         }
@@ -376,7 +381,13 @@ export class BeliefTracker {
     const llm = st.llmResult;
     const entities: Record<string, string> = {};
     for (const [k, v] of Object.entries(st.fast)) if (v !== undefined) entities[k] = v;
-    if (llm) for (const [k, v] of Object.entries(llm.entities)) entities[k] = String(v);
+    // Fast day/time are already normalized; the llm sometimes returns prose ("Thursday at 2").
+    if (llm) {
+      for (const [k, v] of Object.entries(llm.entities)) {
+        if ((k === 'day' || k === 'time') && st.fast[k] !== undefined) continue;
+        entities[k] = String(v);
+      }
+    }
     if (entities.person) entities.person = this.normalizePerson(entities.person);
 
     const today = this.today();
@@ -457,7 +468,8 @@ export class BeliefTracker {
    * claim on the belief and returns the interject text. Max one per turn.
    */
   private checkContradiction(st: TurnState, belief: Belief): string | undefined {
-    if (st.interjectClaim || st.ending) return undefined; // never interject after the user stopped
+    // never interject after the user stopped (finalized by eager end, or turn end)
+    if (st.interjectClaim || st.ending || st.finalized) return undefined;
     if (!st.locked || belief.confidence < this.cfg.INTERJECT_AT) return undefined;
     const fast = this.fastClaim(st);
     const candidates = [...belief.claims, ...(fast ? [fast] : [])];
