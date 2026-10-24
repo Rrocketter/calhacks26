@@ -2,7 +2,7 @@
 // from workspace-seed as a disposable nested git repo.
 // The only git init allowed in this project happens here, inside that workspace.
 import { execFileSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,12 +14,36 @@ const isInside = (child, parent) => {
   return rel === '' || (rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel));
 };
 
-// Empty or unset means the default. A leading ~ expands to home.
-export function resolveWorkspace(raw, home) {
+// Empty or unset means the default. A leading ~ expands to home. Relative values resolve
+// against the repo root (same as apps/server/src/env.ts), so checkTarget refuses them.
+export function resolveWorkspace(raw, home, repoRoot) {
   const value = raw || path.join(home, '.ahead', 'workspace');
   if (value === '~') return path.resolve(home);
   if (value.startsWith('~/')) return path.resolve(home, value.slice(2));
-  return path.resolve(value);
+  return path.resolve(repoRoot, value);
+}
+
+// Returns the value of `key` from a dotenv file, or undefined (missing file or key).
+// Only that one line is parsed; nothing from the file is ever printed. Last definition wins,
+// like node --env-file.
+export function readEnvValue(file, key) {
+  let text;
+  try {
+    text = readFileSync(file, 'utf8');
+  } catch {
+    return undefined;
+  }
+  let found;
+  for (const line of text.split(/\r?\n/)) {
+    const eq = line.indexOf('=');
+    if (eq < 0 || line.slice(0, eq).trim() !== key) continue;
+    let v = line.slice(eq + 1).trim();
+    const q = v[0];
+    if ((q === '"' || q === "'") && v.indexOf(q, 1) > 0) v = v.slice(1, v.indexOf(q, 1));
+    else v = v.replace(/\s+#.*$/, '');
+    found = v;
+  }
+  return found;
 }
 
 // Pure path guard. Returns a refusal reason, or null if the path is acceptable.
@@ -50,7 +74,9 @@ function main() {
   const start = performance.now();
   const repoRoot = canonical(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'));
   const home = canonical(os.homedir());
-  const target = canonical(resolveWorkspace(process.env.AHEAD_WORKSPACE, os.homedir()));
+  // Same source as the server (node --env-file=.env): the shell wins, then the repo .env.
+  const raw = process.env.AHEAD_WORKSPACE ?? readEnvValue(path.join(repoRoot, '.env'), 'AHEAD_WORKSPACE');
+  const target = canonical(resolveWorkspace(raw, os.homedir(), repoRoot));
   const seed = path.join(repoRoot, 'workspace-seed');
 
   const refuse = (reason) => {

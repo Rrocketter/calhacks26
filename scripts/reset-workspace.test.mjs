@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { canonical, checkTarget, resolveWorkspace } from './reset-workspace.mjs';
+import { canonical, checkTarget, readEnvValue, resolveWorkspace } from './reset-workspace.mjs';
 
 const repoRoot = canonical(path.resolve(import.meta.dirname, '..'));
 const home = canonical(os.homedir());
@@ -35,13 +35,45 @@ test('rejects relative paths in checkTarget', () => {
 
 test('empty or unset resolves to default', () => {
   const dflt = path.join(home, '.ahead', 'workspace');
-  assert.equal(resolveWorkspace('', home), dflt);
-  assert.equal(resolveWorkspace(undefined, home), dflt);
+  assert.equal(resolveWorkspace('', home, repoRoot), dflt);
+  assert.equal(resolveWorkspace(undefined, home, repoRoot), dflt);
 });
 
 test('expands leading ~', () => {
-  assert.equal(resolveWorkspace('~/x', home), path.join(home, 'x'));
-  assert.equal(resolveWorkspace('~', home), home);
+  assert.equal(resolveWorkspace('~/x', home, repoRoot), path.join(home, 'x'));
+  assert.equal(resolveWorkspace('~', home, repoRoot), home);
+});
+
+test('relative values resolve against the repo root, so the guard refuses them', () => {
+  assert.equal(resolveWorkspace('var/ws', home, repoRoot), path.join(repoRoot, 'var', 'ws'));
+  assert.match(check(resolveWorkspace('var/ws', home, repoRoot)), /inside the repo/);
+  assert.equal(resolveWorkspace('../ws', home, repoRoot), path.join(path.dirname(repoRoot), 'ws'));
+});
+
+test('readEnvValue reads only the named key from a .env file', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'ahead-env-'));
+  const file = path.join(dir, '.env');
+  writeFileSync(
+    file,
+    [
+      '# comment',
+      'OTHER_KEY=sk_should_not_matter',
+      'AHEAD_WORKSPACE=/tmp/first',
+      '  AHEAD_WORKSPACE = "/tmp/quoted ws"  ',
+      'AHEAD_WORKSPACE_X=/tmp/nope',
+      '',
+    ].join('\n'),
+  );
+  assert.equal(readEnvValue(file, 'AHEAD_WORKSPACE'), '/tmp/quoted ws');
+  writeFileSync(file, "AHEAD_WORKSPACE='~/single' # trailing\n");
+  assert.equal(readEnvValue(file, 'AHEAD_WORKSPACE'), '~/single');
+  writeFileSync(file, 'AHEAD_WORKSPACE=/tmp/bare # comment\n');
+  assert.equal(readEnvValue(file, 'AHEAD_WORKSPACE'), '/tmp/bare');
+  writeFileSync(file, 'AHEAD_WORKSPACE=\n');
+  assert.equal(readEnvValue(file, 'AHEAD_WORKSPACE'), '');
+  writeFileSync(file, 'OTHER=1\n');
+  assert.equal(readEnvValue(file, 'AHEAD_WORKSPACE'), undefined);
+  assert.equal(readEnvValue(path.join(dir, 'missing.env'), 'AHEAD_WORKSPACE'), undefined);
 });
 
 test('accepts default and scratch paths', () => {
