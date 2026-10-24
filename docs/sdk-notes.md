@@ -483,6 +483,7 @@ All times are from the fixture's `turn_start`. `merge done` runs from STAGED to 
 | merge done after STAGED | n/a (driver bug, fixed) | 2774 | 1815 | 2910 | 3754 (rollback) |
 | result | main has Friday draft | PASS | PASS | PASS | PASS, main untouched |
 
+- After the phantom-turn fix (636cf68), re-run with spoken confirms: utterance 1 lock 2024, interject 3058, first droid_event 6423, STAGED 23273, merge done +2592 after STAGED, PASS (draft says Friday). Utterance 2 lock 2281, first droid_event 5098, STAGED 14897, merge done +2553, PASS. Live `smoke:voice` PASS again (server Sonic TTFA 813 ms on that run, 74.9 ms on the first).
 - Executor inside these runs: Phase 1 9.1 to 19.0 s, Phase 2 first diff 4.5 to 7.7 s, commit 1.36 to 1.69 s, rollback 1.66 s.
 - Utterance 1: the fixture turn ends at +4.95 s. Phase 2 waits for the correction answer (by design, see below), which the driver gives at about +5.5 s, so STAGED lands 13 to 20 s after the user stops. Phase 1 is still running when Phase 2 is queued; the executor serializes them.
 - Final Haiku belief after `turn_end`: 0.66 to 2.5 s (mostly 1.0 to 1.8 s).
