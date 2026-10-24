@@ -13,6 +13,11 @@ const DIFF = `--- a/calendar.json
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
+/**
+ * Emits droid_event kinds plan, step x3, diff, result over about 2000 ms.
+ * Payloads: plan {steps: string[]}, step {n, text}, diff {file, diff (unified)},
+ * result {ok, summary}.
+ */
 export async function* mockDroidRun(turnId: string): AsyncGenerator<ServerEvent> {
   const steps: { kind: 'plan' | 'step' | 'diff' | 'result'; payload: unknown }[] = [
     { kind: 'plan', payload: { steps: ['Read calendar.json', 'Edit event', 'Verify'] } },
