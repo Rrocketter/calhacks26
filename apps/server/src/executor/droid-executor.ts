@@ -117,7 +117,13 @@ export class DroidExecutor implements Executor {
     }
   }
 
-  async warm(): Promise<void> {
+  // On the chain, so a warm() issued right after commit/rollback opens a fresh session after them.
+  warm(): Promise<void> {
+    return this.enqueue(() => this.ensureSession());
+  }
+
+  // Never throws; on failure emits an error event and leaves the session null.
+  private async ensureSession(): Promise<void> {
     if (this.session) return;
     if (this.opening) return this.opening;
     this.opening = this.open().finally(() => {
@@ -156,7 +162,7 @@ export class DroidExecutor implements Executor {
     return this.enqueue(async () => {
       if (gen !== this.rollbackGen) return;
       if (this.live) await this.doRollback(this.live.turnId);
-      await this.warm();
+      await this.ensureSession();
       const s = this.session;
       if (!s) return this.fail('no droid session');
       const t0 = performance.now();
@@ -229,10 +235,15 @@ export class DroidExecutor implements Executor {
     });
   }
 
-  async resetToPhase1(turnId: string): Promise<void> {
-    this.resetGen++;
-    await this.interruptRunning(['phase2']);
+  // Generation bump and interrupt happen synchronously; the reset itself joins the chain in call order.
+  resetToPhase1(turnId: string): Promise<void> {
+    let interrupted: Promise<void> = Promise.resolve();
+    if (this.live?.turnId === turnId) {
+      this.resetGen++;
+      interrupted = this.interruptRunning(['phase2']);
+    }
     return this.enqueue(async () => {
+      await interrupted;
       const post1 = this.live?.turnId === turnId ? this.live.post1 : null;
       if (post1 === null) {
         console.log('[droid] resetToPhase1: no phase1 commit for this turn, skipped');
@@ -260,10 +271,13 @@ export class DroidExecutor implements Executor {
     });
   }
 
-  async rollback(turnId: string): Promise<void> {
+  rollback(turnId: string): Promise<void> {
     this.rollbackGen++;
-    await this.interruptRunning(['phase1', 'phase2']);
-    return this.enqueue(() => this.doRollback(turnId));
+    const interrupted = this.interruptRunning(['phase1', 'phase2']);
+    return this.enqueue(async () => {
+      await interrupted;
+      await this.doRollback(turnId);
+    });
   }
 
   // Runs on the chain. Leaves no live speculation: the named turn and any other live one are discarded.

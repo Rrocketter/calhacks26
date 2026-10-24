@@ -58,6 +58,8 @@ interface Factory {
   signals: AbortSignal[];
   // Phase 2 behaviour per call, in order; 'edit' once exhausted.
   phase2: Phase2Mode[];
+  // Phase 1 behaviour per call, in order; normal once exhausted.
+  phase1: 'block'[];
   phase2Started: () => Promise<void>;
 }
 
@@ -78,6 +80,7 @@ function factory(root: string, opts: { fail?: string } = {}): Factory {
     handlers: [],
     signals: [],
     phase2: [],
+    phase1: [],
     open: async () => {
       throw new Error('unset');
     },
@@ -102,10 +105,10 @@ function factory(root: string, opts: { fail?: string } = {}): Factory {
         active = true;
         prompts.push(prompt);
         const isPhase2 = prompt.includes('Today is');
-        const mode: Phase2Mode = isPhase2 ? (f.phase2.shift() ?? 'edit') : 'edit';
+        const mode: Phase2Mode = isPhase2 ? (f.phase2.shift() ?? 'edit') : (f.phase1.shift() ?? 'edit');
         return (async function* () {
           try {
-            if (!isPhase2) {
+            if (!isPhase2 && mode !== 'block') {
               yield call('1', 'Read', { file_path: 'calendar.json' });
               yield result('success');
               return;
@@ -326,7 +329,7 @@ test('back-to-back un-awaited phase1, phase2, commit run in order', async () => 
   assertValid(events);
 });
 
-test('resume during a blocked phase2 resolves it quietly; a fresh phase2 then succeeds', async () => {
+test('resume during a blocked phase2 resolves it quietly; a fresh phase2 then succeeds', { timeout: 5000 }, async () => {
   const { root, git, f, events, exec } = setup();
   f.phase2.push('block');
   await exec.phase1('t1', belief());
@@ -347,7 +350,7 @@ test('resume during a blocked phase2 resolves it quietly; a fresh phase2 then su
   assertValid(events);
 });
 
-test('rollback during a blocked phase2 resolves it quietly', async () => {
+test('rollback during a blocked phase2 resolves it quietly', { timeout: 5000 }, async () => {
   const { root, git, f, events, exec } = setup();
   f.phase2.push('block');
   await exec.phase1('t1', belief());
@@ -374,5 +377,78 @@ test('permission handler is bound to the live turnId', async () => {
   const denied = droid(events, 'tool').filter((e) => e.denied);
   assert.deepEqual(denied.map((e) => e.turnId), ['none', 't1']);
   assert.equal(f.signals[0]!.aborted, false);
+  assertValid(events);
+});
+
+test('rollback during a blocked phase1 resolves it quietly and removes the branch', { timeout: 5000 }, async () => {
+  const { root, git, raw, f, events, exec } = setup();
+  f.phase1.push('block');
+  const started = f.phase2Started();
+  const blocked = exec.phase1('t1', belief());
+  await started;
+  await exec.rollback('t1');
+  await blocked;
+  assert.ok(f.sessions[0]!.calls.includes('interrupt'));
+  assert.equal(await git.currentBranch(), 'main');
+  assert.deepEqual(specBranches(raw), []);
+  assert.equal(calendar(root), seedCalendar);
+  assertValid(events);
+});
+
+test('same tick: rollback(t1) then phase1(t2) leaves spec/t2 live with a session', { timeout: 5000 }, async () => {
+  const { git, raw, f, events, exec } = setup();
+  await exec.phase1('t1', belief());
+  const r = exec.rollback('t1');
+  const p = exec.phase1('t2', belief());
+  await Promise.all([r, p]);
+  assert.deepEqual(specBranches(raw), ['spec/t2']);
+  assert.equal(await git.currentBranch(), 'spec/t2');
+  assert.equal(f.sessions.length, 2);
+  assert.ok(!f.sessions[1]!.calls.includes('close'));
+  await exec.phase2('t2', belief());
+  assert.equal(droid(events, 'result').length, 1);
+});
+
+test('same tick: resetToPhase1(t1) then phase2(t1) keeps the new diff on the branch', { timeout: 5000 }, async () => {
+  const { root, git, events, exec } = setup();
+  await exec.phase1('t1', belief());
+  await exec.phase2('t1', belief());
+  const r = exec.resetToPhase1('t1');
+  const p = exec.phase2('t1', belief());
+  await Promise.all([r, p]);
+  assert.equal(droid(events, 'result').length, 2);
+  assert.match(calendar(root), /2026-11-02/);
+  assert.equal((await git.diffFiles('t1')).length, 1);
+  assert.equal(await git.isClean(), true);
+});
+
+for (const op of ['commit', 'rollback'] as const) {
+  test(`same tick: ${op}(t1) then warm() leaves a fresh session`, { timeout: 5000 }, async () => {
+    const { f, exec } = setup();
+    await exec.phase1('t1', belief());
+    await exec.phase2('t1', belief());
+    const a = exec[op]('t1');
+    const w = exec.warm();
+    await Promise.all([a, w]);
+    assert.equal(f.sessions.length, 2);
+    assert.ok(f.sessions[0]!.calls.includes('close'));
+    assert.ok(!f.sessions[1]!.calls.includes('close'));
+    await exec.warm();
+    assert.equal(f.sessions.length, 2);
+  });
+}
+
+test('resetToPhase1 for a turn that is not live does not interrupt the running phase', { timeout: 5000 }, async () => {
+  const { f, events, exec } = setup();
+  await exec.phase1('t1', belief());
+  f.phase2.push('block');
+  const started = f.phase2Started();
+  const blocked = exec.phase2('t1', belief());
+  await started;
+  const r = exec.resetToPhase1('other');
+  await new Promise((res) => setTimeout(res, 20));
+  assert.ok(!f.sessions[0]!.calls.includes('interrupt'));
+  await exec.rollback('t1');
+  await Promise.all([blocked, r]);
   assertValid(events);
 });
