@@ -33,12 +33,14 @@ export function TopBar({ hud, mode, running, starting, onStart, onStop, onDemo }
   const { count, totalMs } = hud.moss;
   const avg = count ? totalMs / count : null;
   const ttfa = hud.ttfa.client ?? hud.ttfa.server;
-  // Staged work for this turn, and the turn has ended: the next "yes" / "no" applies it.
+  // Live: the server's confirm_window metric. The mock never sends it, so there it is
+  // staged work for this turn after the turn has ended.
   const awaiting =
-    (running || mode === 'mock') &&
-    hud.state === 'STAGED' &&
-    hud.droidTurnId === hud.stateTurnId &&
-    hud.finals.some((f) => f.turnId === hud.stateTurnId);
+    mode === 'live'
+      ? running && hud.confirmWindow
+      : hud.state === 'STAGED' &&
+        hud.droidTurnId === hud.stateTurnId &&
+        hud.finals.some((f) => f.turnId === hud.stateTurnId);
   return (
     <header className="topbar">
       <span className="wordmark">
@@ -65,7 +67,6 @@ export function TopBar({ hud, mode, running, starting, onStart, onStop, onDemo }
         <Counter label="Avg retrieval" short="Avg" value={avg} digits={1} unit="ms" />
         <Counter label="Time to first audio" short="TTFA" value={ttfa === undefined ? null : Math.round(ttfa)} unit="ms" />
       </div>
-      {hud.confirmWindow && <span className="badge on">Listening for yes / no</span>}
       <span className="spacer" />
       {mode === 'live' && running && <LevelMeter />}
       <div className="controls">
