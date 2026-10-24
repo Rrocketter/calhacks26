@@ -48,6 +48,8 @@ export class MockSocket implements Transport {
     if (run.id !== this.runId) return;
     const ok = parseServerEvent(JSON.stringify(e));
     this.onEvent(ok ?? { type: 'error', source: 'mock', message: `invalid mock event ${e.type}` });
+    // The server speaks an interject and captions it, like every line it says.
+    if (e.type === 'interject') this.emit(run, { type: 'assistant_reply', turnId: e.turnId, text: e.text, kind: 'interject' });
   }
 
   private state(run: Run, turnId: string, state: Extract<ServerEvent, { type: 'state_change' }>['state']) {
@@ -109,6 +111,7 @@ export class MockSocket implements Transport {
         this.emit(run, out);
         if (e.type === 'droid_event' && e.kind === 'diff') {
           this.state(run, turnId, 'STAGED');
+          this.emit(run, { type: 'assistant_reply', turnId, text: 'Apply?', kind: 'prompt' });
           this.staged = true;
           if (this.pendingApply) this.finish(run, turnId, true);
           maybeAutoConfirm();
@@ -178,6 +181,7 @@ export class MockSocket implements Transport {
     this.terminal = true;
     if (!apply) this.discarded = true;
     this.state(run, turnId, apply ? 'COMMITTED' : 'ROLLED_BACK');
+    this.emit(run, { type: 'assistant_reply', turnId, text: apply ? 'Done.' : 'Dropped.', kind: 'ack' });
   }
 
   send(ev: ClientEvent): void {

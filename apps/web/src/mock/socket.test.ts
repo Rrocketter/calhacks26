@@ -56,6 +56,12 @@ describe('MockSocket', () => {
     expect(last && last.highlight !== null && words(last.text)[last.highlight]).toMatch(/^Thursday/);
   });
 
+  it('captions the interject, the staged prompt and the ack, like the server', async () => {
+    const replies = (await replay()).flatMap((e) => (e.type === 'assistant_reply' ? [[e.kind, e.text]] : []));
+    expect(replies.map(([k]) => k)).toEqual(['interject', 'prompt', 'ack']);
+    expect(replies.slice(1)).toEqual([['prompt', 'Apply?'], ['ack', 'Done.']]);
+  });
+
   it('auto-confirms by default when autoConfirmMs is omitted', async () => {
     const evs = await replay({ speed: 50 });
     expect(states(evs).at(-1)).toBe('COMMITTED');
