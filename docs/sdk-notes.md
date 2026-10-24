@@ -44,3 +44,38 @@ Top hits:
 - The free plan allows 3 indexes total.
 - The only allowed index names are `ahead-spike` (spikes) and `ahead-corpus` (Lane B owns it), both exported from `MOSS_INDEX` in `@ahead/contracts`.
 - No lane creates any other index.
+
+## Cartesia Sonic (TTS)
+
+**`/tts/bytes` is spike-only. It proves the key and gives a rough time-to-first-byte, but Lane A must use the Sonic WebSocket for real time-to-first-audio.**
+
+- Spike endpoint: `POST https://api.cartesia.ai/tts/bytes` with `Authorization: Bearer <key>`, `Cartesia-Version: 2026-08-14`, `Content-Type: application/json`.
+- Model `sonic-3.6`, voice Skylar `db6b0ed5-d5d3-463d-ae85-518a07d3c2b4`, `language: "en"`, output `{container:"wav", encoding:"pcm_s16le", sample_rate:24000}`. Model and voice are constants at the top of `apps/server/scripts/spike-sonic.ts`.
+- Run: `pnpm --filter @ahead/server spike:sonic`. Output goes to `var/spikes/sonic.wav` (gitignored).
+
+### Measured (one run, 90-character interjection line)
+
+| Metric | Value |
+| --- | --- |
+| First byte | 547.9 ms |
+| Total | 926.6 ms |
+| Audio | 5.60 s (268878 bytes, mono 24 kHz s16le) |
+
+`file` reports RIFF WAVE, 16 bit, mono 24000 Hz.
+
+### Quirks
+
+- `voice` as a plain string id worked, no `{id}` wrapper needed.
+- Send `language` only, not `locale`.
+- The body is a WAV with a 44-byte header, so duration is (bytes - 44) / (24000 * 2).
+- Non-2xx: the spike prints `[sonic] error <status> <body>` and exits 1. Never print request headers (they hold the key).
+- Valid model ids: `sonic-3.6` (latest), `sonic-3.5`, `sonic-3`.
+
+### WebSocket (what Lane A should use)
+
+- Endpoint: `wss://api.cartesia.ai/tts/websocket?cartesia_version=2026-08-14`.
+- Request: `{model_id, transcript, voice, language:"en", context_id, output_format:{container:"raw", encoding:"pcm_s16le", sample_rate}, continue}`.
+- Responses: `chunk {data: base64}`, `timestamps`, `flush_done`, `done`, `error`.
+- Cancel: `{context_id, cancel:true}` only halts generation that has not started. For barge-in, also drop any incoming chunks for that `context_id` and flush browser playback.
+- Use a new `context_id` per reply.
+- These WebSocket details come from the docs and are untested live.
