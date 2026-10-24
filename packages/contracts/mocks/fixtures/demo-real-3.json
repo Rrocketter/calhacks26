@@ -2,71 +2,83 @@
   "turnId": "demo-real-3",
   "partials": [
     {
-      "atMs": 1013,
+      "atMs": 991,
       "text": "Find"
     },
     {
-      "atMs": 1423,
+      "atMs": 1194,
       "text": "Find the"
     },
     {
-      "atMs": 2030,
-      "text": "Find the,"
+      "atMs": 1207,
+      "text": "Find the SETI slides"
     },
     {
-      "atMs": 2045,
-      "text": "Find the, actually never mind"
+      "atMs": 1229,
+      "text": "Find the SETI slides."
     },
     {
-      "atMs": 2057,
-      "text": "Find the, actually never mind."
-    },
-    {
-      "atMs": 2058,
-      "text": "Find the, actually never mind.",
+      "atMs": 1229,
+      "text": "Find the SETI slides.",
       "eager": true
     },
     {
-      "atMs": 2409,
+      "atMs": 1590,
       "text": "",
       "resume": true
     },
     {
-      "atMs": 3299,
-      "text": "Find the, actually never mind. When"
+      "atMs": 2804,
+      "text": "Find the SETI slides. Actually"
     },
     {
-      "atMs": 3434,
-      "text": "Find the, actually never mind. When is"
+      "atMs": 3222,
+      "text": "Find the SETI slides. Actually, never"
     },
     {
-      "atMs": 3641,
-      "text": "Find the, actually never mind. When is my"
+      "atMs": 3623,
+      "text": "Find the SETI slides. Actually, never mind"
     },
     {
-      "atMs": 4056,
-      "text": "Find the, actually never mind. When is my math"
+      "atMs": 4030,
+      "text": "Find the SETI slides. Actually, never mind. When"
     },
     {
-      "atMs": 4459,
-      "text": "Find the, actually never mind. When is my math"
+      "atMs": 4218,
+      "text": "Find the SETI slides. Actually, never mind. When is"
     },
     {
-      "atMs": 4482,
-      "text": "Find the, actually never mind. When is my math 52 homework"
+      "atMs": 4419,
+      "text": "Find the SETI slides. Actually, never mind. When is my"
     },
     {
-      "atMs": 4497,
-      "text": "Find the, actually never mind. When is my math 52 homework due?"
+      "atMs": 4623,
+      "text": "Find the SETI slides. Actually, never mind. When is my math"
     },
     {
-      "atMs": 4497,
-      "text": "Find the, actually never mind. When is my math 52 homework due?",
+      "atMs": 5414,
+      "text": "Find the SETI slides. Actually, never mind. When is my math 5"
+    },
+    {
+      "atMs": 5414,
+      "text": "Find the SETI slides. Actually, never mind. When is my math 52"
+    },
+    {
+      "atMs": 5459,
+      "text": "Find the SETI slides. Actually, never mind. When is my math 52 homework"
+    },
+    {
+      "atMs": 5478,
+      "text": "Find the SETI slides. Actually, never mind. When is my math 52 homework due?"
+    },
+    {
+      "atMs": 5479,
+      "text": "Find the SETI slides. Actually, never mind. When is my math 52 homework due?",
       "eager": true
     },
     {
-      "atMs": 4872,
-      "text": "Find the, actually never mind. When is my math 52 homework due?",
+      "atMs": 6240,
+      "text": "Find the SETI slides. Actually, never mind. When is my math 52 homework due?",
       "final": true
     }
   ]

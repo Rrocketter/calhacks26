@@ -18,20 +18,22 @@ const TTS_WAIT_MS = 15000;
  * a lookup whose Moss hits (docId + snippet) match `hit`.
  */
 type Check =
-  | { kind: 'action'; file: string; interject?: boolean; must?: RegExp[]; mustNot?: RegExp[]; staged?: RegExp[] }
-  | { kind: 'lookup'; hit: RegExp };
+  | { kind: 'action'; file: string | RegExp; interject?: boolean; must?: RegExp[]; mustNot?: RegExp[]; staged?: RegExp[] }
+  | { kind: 'lookup'; hit: RegExp; rollback?: boolean };
 const CHECKS: Record<string, Check> = {
   // Synthetic seed (unit-test fixtures).
   'demo-utterance-1': { kind: 'action', file: 'messages/outbox/priya.md', interject: true, must: [/Friday/], mustNot: [/Thursday/] },
-  'demo-utterance-2': { kind: 'action', file: 'calendar.json' },
+  'demo-utterance-2': { kind: 'action', file: /^calendar\/evt-priya-q3\.json$/ },
   // Google import (IMPORT_GOOGLE=1). Dates are for the week of 2026-10-24.
   'demo-real-1': { kind: 'action', file: 'messages/outbox/esha.md', interject: true, must: [/Monday/], mustNot: [/Tuesday/] },
   'demo-real-2': {
     kind: 'action',
-    file: 'calendar.json',
+    // The calendar is one file per event; this is the 2026-10-27 occurrence.
+    file: /^calendar\/g-evt-[^/]*_20261027T200000Z\.json$/,
     staged: [/^-.*"start": "2026-10-27T13:00:00-07:00"/m, /^\+.*"start": "2026-10-28T14:00:00-07:00"/m],
   },
-  'demo-real-3': { kind: 'lookup', hit: /MATH 52 HW due/i },
+  // "Find the SETI slides" speculates find_file; "never mind ... when is" rolls it back.
+  'demo-real-3': { kind: 'lookup', hit: /MATH 52 HW due/i, rollback: true },
   'demo-real-4': { kind: 'lookup', hit: /^memory-\S+-artifact .*\besha\b/i },
 };
 
@@ -265,12 +267,14 @@ ws.on('open', async () => {
 
   const problems: string[] = [];
   const action = check?.kind === 'action' ? check : null;
+  const isTarget = (f: string) => (action ? (typeof action.file === 'string' ? f === action.file : action.file.test(f)) : false);
   let content = '';
   try {
     const mainSubject = git('log', '-1', '--format=%s', 'main').trim();
     changed.push(...git('diff-tree', '--no-commit-id', '--name-only', '-r', 'main').split('\n').filter(Boolean));
     console.log(`--- workspace main: ${mainSubject} ---\n${git('show', 'main', '--stat')}`);
-    if (finalState === 'COMMITTED' && action) content = git('show', `main:${action.file}`);
+    const file = changed.find(isTarget);
+    if (finalState === 'COMMITTED' && file) content = git('show', `main:${file}`);
   } catch (err) {
     problems.push(`workspace git failed: ${(err as Error).message.split('\n')[0]}`);
   }
@@ -280,6 +284,7 @@ ws.on('open', async () => {
   console.log(`turn_start -> interject: ${gap('turn_start', 'interject')}`);
   console.log(`turn_start -> first droid_event: ${gap('turn_start', 'droid')}`);
   console.log(`turn_start -> STAGED: ${gap('turn_start', 'staged')}`);
+  console.log(`lock -> STAGED: ${gap('lock', 'staged')}`);
   console.log(`STAGED -> final: ${gap('staged', 'final')}`);
   console.log(`${finalState === 'ROLLED_BACK' ? 'rollback' : 'commit'} done ${marks.merge === undefined ? 'n/a' : `+${marks.merge}ms (STAGED -> merge-done ${gap('staged', 'merge')})`}`);
   console.log(`turn_end -> spoken answer: ${gap('turn_end', 'answer')}`);
@@ -295,6 +300,7 @@ ws.on('open', async () => {
     if (!hits.some((h) => check.hit.test(h))) problems.push(`no hit matching ${check.hit}`);
     if (marks.answer === undefined) problems.push('no spoken answer');
     if (speculated && !rolledBack) problems.push('a speculation started and was not rolled back');
+    if (check.rollback && !(speculated && rolledBack)) problems.push('no find_file speculation rolled back');
   }
   if (action) {
     const want = confirm === 'reject' ? 'ROLLED_BACK' : 'COMMITTED';
@@ -305,7 +311,10 @@ ws.on('open', async () => {
     else if (marks.merge === undefined) problems.push('no droid commit/rollback metric');
     if (finalState !== want) problems.push(`final state ${finalState ?? 'none'}, wanted ${want}`);
     if (action.interject && !interjected) problems.push(`no interject for ${fixture}`);
-    const staged = stagedDiffs.get(action.file) ?? '';
+    const stagedFile = [...stagedDiffs.keys()].find(isTarget);
+    const staged = stagedFile ? stagedDiffs.get(stagedFile)! : '';
+    if (stagedDiffs.size && !stagedFile) problems.push(`staged diff touches ${[...stagedDiffs.keys()].join(', ')}, not ${action.file}`);
+    if (stagedDiffs.size > 1) problems.push(`staged diff touches ${stagedDiffs.size} files`);
     const changedLines = staged.split('\n').filter((l) => /^[-+](?![-+])/.test(l));
     console.log(`staged ${action.file}: ${changedLines.length} changed lines`);
     for (const l of changedLines.slice(0, 8)) console.log(`  ${l.slice(0, 160)}`);
@@ -316,7 +325,7 @@ ws.on('open', async () => {
       if (moved || dirty) problems.push(`main not clean after discard (${moved ? 'main moved' : 'main unchanged'}, ${dirty ? 'dirty' : 'clean'})`);
     }
     if (finalState === 'COMMITTED' && want === 'COMMITTED') {
-      if (!changed.includes(action.file)) problems.push(`main diff does not touch ${action.file}`);
+      if (!changed.some(isTarget)) problems.push(`main diff does not touch ${action.file}`);
       if (action.interject && interjected && !NO_CORRECT) {
         if (correctionExpired) problems.push('correction window expired before the driver answered');
         for (const re of action.must ?? []) if (!re.test(content)) problems.push(`${action.file} lacks ${re}`);

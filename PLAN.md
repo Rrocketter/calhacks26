@@ -63,12 +63,12 @@ Mic ──► Cartesia Ink 2 (streaming STT, turn events)
 - `apps/web` Vite + React. Mic capture, audio playback, HUD. Talks to server over one WebSocket.
 - `apps/server` Node + TS. Holds Moss runtime, belief tracker, Droid executor, Cartesia proxies. Single process. Sonic goes over the WebSocket API with `sonic-3.6`; `/tts/bytes` is spike only. Ink rewrites numbers ("two" becomes "2") and adds punctuation, so contradiction and entity matching normalize text first.
 - `packages/contracts` Shared TS types and the WebSocket event schema. Written FIRST. Every lane codes against it with mocks.
-- `workspace-seed/` Tracked seed files that stand in for "your life": `calendar.json`, `contacts.json`, `notes/*.md`, `messages/outbox/*.md`, `files/*`.
+- `workspace-seed/` Tracked seed files that stand in for "your life": `calendar.json` (written to the workspace as `calendar/<event-id>.json` plus `calendar/index.json`), `contacts.json`, `notes/*.md`, `messages/outbox/*.md`, `files/*`.
 - `~/.ahead/workspace/` (override `AHEAD_WORKSPACE`) Runtime copy of the seed, outside the repo, with its own `git init`, created by `pnpm reset:workspace`. Droid edits these. Diffs are real and visible. Never nest a git repo inside the main repo.
 - `data/corpus/` Generated synthetic personal corpus (300 to 500 docs) indexed into Moss with metadata (type, date, people).
 
 ### Action set (exactly five, do not add more)
-1. `reschedule_event` (edit calendar.json)
+1. `reschedule_event` (edit one event file, `calendar/<event-id>.json`)
 2. `draft_message` (write messages/outbox/<name>.md)
 3. `find_file` (locate + surface a file from files/)
 4. `add_note` (append to notes/)
@@ -114,14 +114,14 @@ Runs on the presenter's real calendar and email: `IMPORT_GOOGLE=1` with `CALENDA
 → belief locks reschedule_event at "SETI", Droid stages SETI Research Meeting Tue 10-27 13:00 → Wed 10-28 14:00 (only that occurrence), "Apply?", user: "no". Main is unchanged.
 
 **Utterance 3 (rollback, shows honesty):**
-"Find the... actually never mind, when is my Math 52 homework due?"
-→ a find_file guess may start speculating and is rolled back when the intent turns to lookup; the answer is "Monday, October 26 at 11:59 PM".
+"Find the SETI slides, actually never mind, when is my Math 52 homework due?"
+→ find_file locks on "Find the SETI slides" (`files/seti-slides.pdf`, a seed file the import keeps) and speculates; it is rolled back when the intent turns to lookup; the answer is "Monday, October 26 at 11:59 PM".
 
 **Utterance 4 (conversation memory):**
 "What did I tell Esha?"
 → Moss memory returns the committed draft; the answer names Monday and the VQE results.
 
-**Hardcoded fallback:** `DEMO_MODE=1` replays recorded Ink partials so the full loop runs even if the mic or network dies. Fixtures `demo-real-1`..`demo-real-4` were recorded through real Ink 2 from macOS `say` audio (`pnpm --filter @ahead/server record:fixture <name> "<sentence>"`; utterance 4 uses `--voice=Karen --rate=160`, the voice Ink transcribes as "Esha"). Headless check, server started with `IMPORT_GOOGLE=1 DEMO_MODE=1`:
+**Hardcoded fallback:** `DEMO_MODE=1` replays recorded Ink partials so the full loop runs even if the mic or network dies. Fixtures `demo-real-1`..`demo-real-4` were recorded through real Ink 2 from macOS `say` audio (`pnpm --filter @ahead/server record:fixture <name> "<sentence>"`; utterance 3 uses `--voice=Daniel` (Samantha's "SETI" comes out as "settings"), utterance 4 `--voice=Karen --rate=160`, the voice Ink transcribes as "Esha"). Headless check, server started with `IMPORT_GOOGLE=1 DEMO_MODE=1`:
 
 ```
 pnpm --filter @ahead/server demo:run demo-real-1 --confirm=spoken

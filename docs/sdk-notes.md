@@ -600,3 +600,23 @@ All times are from the fixture's `turn_start`. `merge done` runs from STAGED to 
 | Cloud-sim (+300 ms per query) | 5.2 to 6.4 s | 9.9 to 11.1 s, about 5 s after the user finished | 915 to 918 ms / 1.22 to 1.23 s |
 
 Under cloud-sim the tracker still interjects late: the "Tuesday" partial's step is queued behind the slow ones and is processed before the eager end in chain order. So the user would hear the correction about 5 s after they stopped talking.
+
+### Calendar as one file per event; Phase 1 opens one file (2026-10-24)
+
+- **Layout:** the workspace calendar is `calendar/<event-id>.json` plus `calendar/index.json` (one `{id, title, start, file}` per line, sorted by start; 48 KB for 217 events). `scripts/calendar-layout.mjs` writes it for both `reset:workspace` (seed and Google overlay) and `import:google` (`data/google/calendar/`). An older import's `data/google/calendar.json` is split on reset. The workspace has no `calendar.json`.
+- **Targets** (`apps/server/src/executor/targets.ts`):
+  - **Event:** for reschedule_event, the server resolves the event from the belief: the `event` slot's title, else the first Moss hit that is an indexed event. It then takes that title's next occurrence on or after today. Phase 1 says "Open only this file: Read `calendar/<id>.json` and no other file under calendar/", and Phase 2 edits that same path.
+  - **Contact:** for draft_message, the one contact goes inline in the prompt ("do not open contacts.json").
+  - **No target:** Phase 1 falls back to `calendar/index.json`, or to reading `contacts.json`.
+- **Round trips were the cost, not file size.** With the event file named, reschedule Phase 1 was still 10 to 14 s: three model calls of about 3.5 s each (Read, TodoWrite, final reply). `reasoningEffort` low or minimal made no difference (10.8 to 12 s, one low run took 79 s). Asking for Read and TodoWrite "in the same message" cut it to 5 to 8 s.
+- **Measured** in DEMO_MODE (`IMPORT_GOOGLE=1`), 3 runs each, workspace reset before each pair:
+
+  | Fixture | lock → STAGED | Droid Phase 1 |
+  | --- | --- | --- |
+  | demo-real-1 (draft to Esha) | 13.7 s, 11.4 s, 12.2 s (was 20 to 22 s) | 6.6 to 7.8 s |
+  | demo-real-2 (SETI move, discarded) | 11.9 s, 10.3 s, 8.4 s (was 24 to 37 s) | 5.1 to 7.2 s |
+
+  All 6 PASS. In one earlier run (before the Phase 1 change), demo-real-2 never locked mid-turn: Haiku's partial results kept confidence under 0.75 until turn end, so nothing was speculated.
+- **Utterance 3** is now "Find the SETI slides, actually never mind, when is my Math 52 homework due?". `workspace-seed/files/seti-slides.pdf` is a one-page PDF. Seed files are in both corpora (`scripts/seed-files.ts`), and `ahead-corpus` was rebuilt with them (324 docs).
+  - Recording: with Samantha, Ink heard "Find the settings", and the "..." pause ended the turn at 1.2 s. With Daniel and commas, Ink gives the whole sentence: "Find the SETI slides." with an eager end at 1.23 s, a resume at 1.59 s, then the question.
+  - Result: find_file locks at 2.8 to 4.2 s (0.91 to 0.94) and rolls back at 5.1 to 5.7 s in **4 of 4** runs. The answer is "Monday, October 26 at 11:59 PM" every time.

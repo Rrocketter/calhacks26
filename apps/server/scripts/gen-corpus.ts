@@ -3,6 +3,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { REPO_ROOT } from '../src/env.js';
 import type { CorpusDoc } from '../src/belief/types.js';
+import { seedFileDocs } from './seed-files.js';
 
 export type SeedEvent = { id: string; title: string; start: string; end: string; attendees: string[]; location: string };
 export type SeedContact = { id: string; name: string; email: string; phone: string; notes: string };
@@ -153,25 +154,7 @@ export function generateCorpus(seed = 1): CorpusDoc[] {
     });
   }
 
-  const filesDir = path.join(SEED, 'files');
-  for (const f of fs.readdirSync(filesDir).sort()) {
-    const stem = f.replace(/\.(xlsx\.txt|pdf)$/, '');
-    const body = f.endsWith('.txt') ? fs.readFileSync(path.join(filesDir, f), 'utf8').trim() : '';
-    const summary =
-      stem === 'q3-deck'
-        ? 'Q3 deck with the roadmap slide for the board. Reviewed with Priya Shah.'
-        : 'Last year draft of the 2026 budget. Kept by Sam Rivera.';
-    docs.push({
-      id: `file-${stem}`,
-      text: `File files/${f}. ${summary}${body ? ` Contents: ${body}` : ''}`,
-      metadata: {
-        type: 'file',
-        date: '2026-10-20',
-        people: stem === 'q3-deck' ? 'Priya Shah' : 'Sam Rivera',
-        title: f,
-      },
-    });
-  }
+  docs.push(...seedFileDocs(SEED));
 
   // Filler. Never uses the name Priya.
   const people: string[] = [];
