@@ -31,8 +31,10 @@ function sections(intent: Intent): [string, string] {
   return [parts[0]!.trim(), parts[1]!.trim()];
 }
 
-export function phase1Prompt(belief: Belief): string {
-  return sections(belief.intent)[0];
+// `files` are workspace-relative paths under files/, listed by the server (Droid can't list dirs).
+export function phase1Prompt(belief: Belief, files: string[] = []): string {
+  const list = files.length ? files.map(oneLine).join('\n') : '(no files)';
+  return sections(belief.intent)[0].replace('{{files}}', () => list);
 }
 
 function todayLine(now: Date): string {
@@ -50,8 +52,11 @@ function todayLine(now: Date): string {
   return `Today is ${parts.year}-${parts.month}-${parts.day} (${parts.weekday}), timezone ${TIMEZONE}.`;
 }
 
+// Newlines would let a value start a fake instruction line, so collapse them.
+const oneLine = (s: string): string => s.replace(/\r?\n/g, ' ');
+
 function renderSlots(entities: Record<string, string>): string {
-  const lines = Object.entries(entities).map(([k, v]) => `${k}: ${v}`);
+  const lines = Object.entries(entities).map(([k, v]) => `${oneLine(k)}: ${oneLine(v)}`);
   return lines.length ? lines.join('\n') : '(no details)';
 }
 
