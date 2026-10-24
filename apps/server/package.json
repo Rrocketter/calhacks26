@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "lint": "eslint . && tsc --noEmit -p .",
-    "test": "node --import tsx --test scripts/spike-droid.guard.test.ts scripts/env.test.ts scripts/gen-corpus.test.ts src/belief/normalize.test.ts src/belief/entities.test.ts",
+    "test": "node --import tsx --test scripts/spike-droid.guard.test.ts scripts/env.test.ts scripts/gen-corpus.test.ts src/belief/normalize.test.ts src/belief/entities.test.ts src/belief/tracker.test.ts",
     "gen:corpus": "node --import tsx scripts/gen-corpus.ts",
     "build:index": "MOSS_DISABLE_TELEMETRY=1 node --env-file=../../.env --import tsx scripts/build-index.ts",
     "spike:ink": "node --env-file=../../.env --import tsx scripts/spike-ink.ts",

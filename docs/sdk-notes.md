@@ -301,3 +301,18 @@ canary leaked to model: no
 Experiments: `SPIKE_READ_POLICY=list` gave the same canary result as `home` (all 4 sandbox-denied, read-inside ok). `home-noallow` denied all 4 canary reads but broke the in-workspace Edit (`edit: fail`), which shows allowRead is what keeps the workspace readable.
 
 **Latency (Task 12 runs):** `createSession` 441 to 1051 ms. updateSettings plus listTools under 15 ms. Interrupt to turn end 8 to 23 ms. `close()` 1.4 to 2.3 s. A canary-read session took about 4 to 7 s, mostly model time before the Read call.
+
+## Anthropic (Haiku intent)
+
+`@anthropic-ai/sdk` 1.3.0 (exact pin) in `apps/server`, used by `HaikuIntentLlm` (`apps/server/src/belief/haiku.ts`). Request: `claude-haiku-5-5`, `max_tokens: 512`, `thinking: {type: 'disabled'}`, `output_config: {effort: 'low', format: {type: 'json_schema', schema}}`, no temperature/top_p, no tool_choice.
+
+- SDK 1.3.0 types already include `output_config` (`effort`, `format: JSONOutputFormat`) and `ThinkingConfigDisabled`. No casts needed.
+- Structured output comes back as one `text` block holding the JSON. The schema uses `additionalProperties: false` and makes every field required; entities are sent as `[{key, value}]` and turned into a record after parsing.
+- Haiku returns the person as spoken (`"priya"`); the tracker maps it to the contact's full name.
+- It produces `claims` on its own when a context snippet contradicts the partial (it flagged `said: thursday, known: Friday, docId: evt-priya-q3`). Case is not consistent, so normalize before comparing.
+
+### Measured (2026-10-24, "draft a message to priya" plus 2 context snippets)
+
+- First call in a process: 2898 ms (includes TLS setup and probably schema compilation).
+- Next 6 calls: 1508 to 1626 ms (about 1.5 s steady state). Every call returned `draft_message` at confidence 0.9.
+- That is slower than the ~1 s we planned for. The Moss loop doesn't wait on it (calls are fire-and-forget, one in flight per turn), but the lock lands about 1.5 s after the partial that triggered it. A warm-up call at startup would remove the cold-start cost.

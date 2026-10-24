@@ -58,3 +58,10 @@ export function makeEntityExtractor(
     return out;
   };
 }
+
+const TO_DAY_RE = new RegExp(`\\bto (${[...WEEKDAYS, 'today', 'tomorrow'].join('|')})\\b`);
+
+/** The target day in "... to <day>" (e.g. "move it to monday"), if any. */
+export function extractToDay(normalizedText: string): string | undefined {
+  return TO_DAY_RE.exec(normalizedText)?.[1];
+}
