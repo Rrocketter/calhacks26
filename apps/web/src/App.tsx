@@ -1,101 +1,98 @@
-import { useRef, useState } from 'react';
-import type { ServerEvent } from '@ahead/contracts';
+import { useEffect, useReducer, useRef, useState } from 'react';
+import { MockSocket } from './mock/socket';
 import { startLive } from './live/session';
+import type { Transport } from './transport';
+import { hudReducer, initialHud } from './hud/state';
+import { TopBar } from './hud/TopBar';
+import { Transcript } from './hud/Transcript';
+import { BeliefPanel } from './hud/BeliefPanel';
 
-interface LogLine {
-  id: number;
-  text: string;
-}
+const params = new URLSearchParams(location.search);
+const mode: 'live' | 'mock' = params.get('mock') === '1' ? 'mock' : 'live';
+const speed = Number(params.get('speed')) || 1;
 
 export function App() {
+  const [hud, dispatch] = useReducer(hudReducer, undefined, initialHud);
   const [running, setRunning] = useState(false);
   const [starting, setStarting] = useState(false);
-  const [partial, setPartial] = useState('');
-  const [finals, setFinals] = useState<string[]>([]);
-  const [turnId, setTurnId] = useState('');
-  const [log, setLog] = useState<LogLine[]>([]);
-  const [ttfa, setTtfa] = useState<{ client?: number; server?: number }>({});
-  const [error, setError] = useState('');
-  const stopRef = useRef<(() => void) | null>(null);
-  const startingRef = useRef(false);
+  const [startError, setStartError] = useState<string | null>(null);
+  const transport = useRef<Transport | null>(null);
+  const mock = useRef<MockSocket | null>(null);
 
-  async function start() {
-    if (startingRef.current) return;
-    startingRef.current = true;
+  useEffect(
+    () => () => {
+      mock.current?.stop();
+      transport.current?.stop();
+    },
+    [],
+  );
+
+  // Synchronous on purpose: startLive primes audio before its first await.
+  function start() {
+    if (starting || running) return;
     setStarting(true);
-    setError('');
-    const t0 = performance.now();
-    let nextId = 0;
-    const push = (text: string) =>
-      setLog((l) => [...l.slice(-199), { id: nextId++, text: `${text} +${Math.round(performance.now() - t0)}ms` }]);
-    const finish = () => {
-      stopRef.current = null;
-      startingRef.current = false;
-      setStarting(false);
-      setRunning(false);
-    };
+    setStartError(null);
+    dispatch({ type: 'reset' });
+    startLive({
+      onEvent: (e) => {
+        if (e.type !== 'tts_audio_chunk') dispatch(e);
+      },
+      onClientTtfa: (ms) => dispatch({ type: 'client_ttfa', ms }),
+      onClosed: () => {
+        transport.current = null;
+        setRunning(false);
+      },
+    }).then(
+      (t) => {
+        transport.current = t;
+        setStarting(false);
+        setRunning(true);
+      },
+      (err: unknown) => {
+        setStartError(err instanceof Error ? err.message : String(err));
+        setStarting(false);
+      },
+    );
+  }
 
-    try {
-      const transport = await startLive({
-        onClientTtfa: (ms) => setTtfa((t) => ({ ...t, client: ms })),
-        onClosed: (reason) => {
-          push(reason);
-          finish();
-        },
-        onEvent: (e: ServerEvent) => {
-          if (e.type !== 'tts_audio_chunk') push(e.type);
-          switch (e.type) {
-            case 'turn_start':
-              setPartial('');
-              break;
-            case 'transcript_partial':
-              setPartial(e.text);
-              if (e.text.trim() !== '') setTurnId(e.turnId);
-              break;
-            case 'transcript_final':
-              setFinals((f) => [...f.slice(-49), e.text]);
-              setPartial('');
-              break;
-            case 'turn_end':
-              setTurnId(e.turnId);
-              setTtfa({});
-              break;
-            case 'metric':
-              if (e.source === 'sonic' && e.label === 'ttfa') setTtfa((t) => ({ ...t, server: Math.round(e.ms) }));
-              break;
-            case 'error':
-              setError(`${e.source ?? 'server'}: ${e.message}`);
-              break;
-          }
-        },
-      });
-      stopRef.current = transport.stop;
-      setRunning(true);
-      setStarting(false);
-      push('capture started');
-    } catch (err) {
-      setError((err as Error).message);
-      finish();
+  function demo() {
+    if (mode === 'live') {
+      transport.current?.send({ type: 'demo_control', action: 'start', fixture: 'demo-utterance-1' });
+      return;
     }
+    if (!mock.current) {
+      mock.current = new MockSocket(dispatch, {
+        speed,
+        denied: params.get('denied') === '1',
+        failed: params.get('failed') === '1',
+      });
+      transport.current = mock.current;
+    }
+    dispatch({ type: 'reset' });
+    mock.current.play().catch((err: unknown) =>
+      dispatch({ type: 'error', source: 'mock', message: String(err) }),
+    );
   }
 
   return (
-    <main style={{ fontFamily: 'system-ui', maxWidth: 760, margin: '2rem auto', padding: '0 1rem' }}>
-      <h1>AHEAD</h1>
-      <button disabled={starting} onClick={() => (running ? stopRef.current?.() : void start())}>{running ? 'Stop' : 'Start'}</button>
-      {error && <p style={{ color: 'crimson' }}>{error}</p>}
-      <div style={{ margin: '1rem 0', color: '#555' }}>
-        {finals.map((t, i) => (
-          <div key={i}>{t}</div>
-        ))}
-      </div>
-      <div style={{ fontSize: '2rem', minHeight: '3rem' }}>{partial}</div>
-      <p>
-        turn: {turnId || '-'} | TTFA client: {ttfa.client ?? '-'} ms | server: {ttfa.server ?? '-'} ms
-      </p>
-      <pre style={{ height: 200, overflow: 'auto', background: '#f4f4f4', padding: 8, fontSize: 12 }}>
-        {log.map((l) => l.text).join('\n')}
-      </pre>
-    </main>
+    <div className="hud">
+      <TopBar
+        hud={hud}
+        mode={mode}
+        running={running}
+        starting={starting}
+        error={hud.error ?? startError}
+        onStart={start}
+        onStop={() => transport.current?.stop()}
+        onDemo={demo}
+      />
+      <Transcript hud={hud} />
+      <BeliefPanel hud={hud} />
+      <section className="panel">
+        <div className="panel-head">
+          <span className="label">Executor</span>
+        </div>
+      </section>
+    </div>
   );
 }
