@@ -1,5 +1,6 @@
 // Short on purpose: the mic is muted while it plays.
-export const INTERJECT_TEMPLATE = 'Say {known}?';
+/** {event}: "the VQE meeting"; {at}: " at 8:30" for a day claim when the event has a time, else empty. */
+export const INTERJECT_TEMPLATE = 'Heads up, {event} is {known}{at}, not {said}. Say {known}?';
 
 export const BELIEF_CONFIG = {
   SPECULATE_AT: 0.75,

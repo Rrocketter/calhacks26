@@ -2,6 +2,7 @@ import type { Belief, Claim, MossHit, ServerEvent } from '@ahead/contracts';
 import { logLatency } from '../log.js';
 import { BELIEF_CONFIG, INTERJECT_TEMPLATE, type BeliefConfig } from './config.js';
 import { extractToDay, makeEntityExtractor, resolveDay, type FastEntities } from './entities.js';
+import { eventPhrase, spokenTime, topicWords } from './interject.js';
 import { lastWords, normalize } from './normalize.js';
 import type { IntentLlm, IntentResult, RetrievedHit, Retriever } from './types.js';
 
@@ -301,7 +302,7 @@ export class BeliefTracker {
       .sort((a, b) => b.acc - a.acc)
       .slice(0, this.cfg.TOP_HITS)
       .map((e) => e.hit);
-    st.mossSupport = this.mossSupport(fast, st.topHits);
+    st.mossSupport = this.mossSupport(fast, st.topHits, st.normText);
 
     this.rebuild(turnId, st);
 
@@ -341,9 +342,15 @@ export class BeliefTracker {
     return [...new Set(qs.filter(Boolean))];
   }
 
-  private mossSupport(fast: FastEntities, topHits: RetrievedHit[]): number {
+  private mossSupport(fast: FastEntities, topHits: RetrievedHit[], normText: string): number {
     let total = 0;
     let resolved = 0;
+    // An event named by topic ("my SETI research meeting") resolves like a named person does.
+    const strong = topHits.slice(0, STRONG_HIT_RANK);
+    if (strong.some((h) => h.metadata.type === 'calendar' && topicWords(h.metadata.title, normText, h.metadata.people).length > 0)) {
+      total++;
+      resolved++;
+    }
     if (fast.person) {
       total++;
       const name = fast.person.toLowerCase();
@@ -424,6 +431,15 @@ export class BeliefTracker {
       }
     }
     if (entities.person) entities.person = this.normalizePerson(entities.person);
+    // An event named by topic gets its calendar title, before the llm answers and over its paraphrase
+    // ("group meeting"), so a Phase 2 that fires at eager end knows exactly which event to touch.
+    const named = st.topHits
+      .slice(0, STRONG_HIT_RANK)
+      .find((h) => h.metadata.type === 'calendar' && topicWords(h.metadata.title, st.normText, h.metadata.people).length > 0);
+    if (named?.metadata.title) entities.event = named.metadata.title;
+    // A draft's body is what the user said after "saying", verbatim, so Phase 2 does not paraphrase it.
+    const body = llm?.intent === 'draft_message' ? /\bsaying\b[,:]?\s+(.+)$/i.exec(st.rawText)?.[1] : undefined;
+    if (body && !entities.message) entities.message = body.trim();
 
     const today = this.today();
     const day = st.fast.day ?? (entities.day ? normalize(entities.day) : undefined);
@@ -473,18 +489,18 @@ export class BeliefTracker {
     if (interject) this.deps.emit({ type: 'interject', turnId, text: interject });
   }
 
-  /** Fast-path claim: person + day (or time when no day) vs a strong calendar hit for that person. */
+  /**
+   * Fast-path claim: a day (or time when no day) vs a strong calendar hit. An event the user named
+   * by topic (a title word they said, e.g. "VQE") wins; else one the named person attends.
+   */
   private fastClaim(st: TurnState): Claim | undefined {
     const { person, day, time } = st.fast;
-    if (!person || (!day && !time)) return undefined;
-    const name = person.toLowerCase();
-    const doc = st.topHits
-      .slice(0, STRONG_HIT_RANK)
-      .find(
-        (h) =>
-          h.metadata.type === 'calendar' &&
-          (h.metadata.people ?? '').toLowerCase().includes(name),
-      );
+    if (!day && !time) return undefined;
+    const name = person?.toLowerCase();
+    const events = st.topHits.slice(0, STRONG_HIT_RANK).filter((h) => h.metadata.type === 'calendar');
+    const doc =
+      events.find((h) => topicWords(h.metadata.title, st.normText, h.metadata.people).length > 0) ??
+      (name ? events.find((h) => (h.metadata.people ?? '').toLowerCase().includes(name)) : undefined);
     if (!doc) return undefined;
     const field = day ? 'day' : 'time';
     const said = (day ?? time)!;
@@ -518,11 +534,12 @@ export class BeliefTracker {
       const docText = normalize(`${doc.snippet} ${Object.values(doc.metadata).join(' ')}`);
       if (!containsWords(docText, known)) continue;
       if (!containsWords(st.normText, said)) continue;
-      if (belief.intent === 'reschedule_event' && said === belief.entities.to_weekday) continue;
+      // Moving an event to a new day ("to Wednesday") is not a contradiction of its current day.
+      if (belief.intent === 'reschedule_event' && (said === belief.entities.to_weekday || said === extractToDay(st.normText))) continue;
 
-      const person = belief.entities.person ?? (doc.metadata.people ?? '').split(',')[0] ?? '';
-      const first = person.trim().split(/\s+/)[0] ?? '';
-      const text = INTERJECT_TEMPLATE.replace('{person}', first)
+      const time = c.field === 'day' ? spokenTime(doc.metadata.time) : '';
+      const text = INTERJECT_TEMPLATE.replace('{event}', eventPhrase(doc.metadata.title, st.normText, doc.metadata.people))
+        .replace('{at}', time ? ` at ${time}` : '')
         .replaceAll('{known}', capitalize(c.known.trim()))
         .replace('{said}', capitalize(c.said.trim()));
       st.interjectClaim = c;

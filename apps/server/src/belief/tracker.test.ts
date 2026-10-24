@@ -4,7 +4,7 @@ import { parseServerEvent, type MossHit, type ServerEvent } from '@ahead/contrac
 import { BeliefTracker } from './tracker.js';
 import type { IntentLlm, IntentResult, RetrievedHit, Retriever } from './types.js';
 
-const CONTACTS = [{ name: 'Priya Shah' }, { name: 'Marcus Lee' }];
+const CONTACTS = [{ name: 'Priya Shah' }, { name: 'Marcus Lee' }, { name: 'Esha Telang' }];
 
 class FakeRetriever implements Retriever {
   calls: string[] = [];
@@ -417,7 +417,7 @@ const MARCUS_EVT = hit(
   { type: 'calendar', people: 'Marcus Lee', day: 'friday', time: '10 am', title: 'Sync' },
   'Sync with Marcus Lee, Friday 10 am',
 );
-const DEMO_TEXT = 'Say Friday?';
+const DEMO_TEXT = 'Heads up, the Q3 review is Friday at 2, not Thursday. Say Friday?';
 const LOCKED_DRAFT = {
   intent: 'draft_message' as const,
   entities: { person: 'Priya' },
@@ -521,7 +521,7 @@ test('llm claim is verified against the doc', async () => {
   await b.tracker.idle();
   const ij = ofType(b.events, 'interject');
   assert.equal(ij.length, 1);
-  assert.equal(ij[0]!.text, DEMO_TEXT);
+  assert.equal(ij[0]!.text, 'Heads up, the sync is Friday at 10, not Thursday. Say Friday?');
 });
 
 test('same day after normalization is not a contradiction', async () => {
@@ -984,4 +984,71 @@ test('moss is logged once per update as a step; latencyMs.moss is the batch wall
   // per-query latency still reported on moss_hits and metric events
   assert.ok(ofType(events, 'moss_hits').every((e) => e.latencyMs === 0.5));
   assert.equal(ofType(events, 'metric').length, 3);
+});
+
+// ---- events matched by topic ----
+
+const VQE_EVT = hit(
+  'g-evt-vqe',
+  { type: 'calendar', people: 'Ayush Adi, Esha Telang', day: 'monday', time: '8:30 pm', title: 'VQE Project Group Meeting' },
+  'VQE Project Group Meeting. Monday, October 26 at 8:30 PM. With Ayush Adi, Esha Telang.',
+);
+const SETI_EVT = hit(
+  'g-evt-seti',
+  { type: 'calendar', people: '', day: 'tuesday', time: '1 pm', title: 'SETI Research Meeting' },
+  'SETI Research Meeting. Tuesday, October 27 at 1 PM.',
+);
+
+test('topic match: the interject names the event the user said by topic, with its time', async () => {
+  const llm = new InstantLlm({ intent: 'draft_message', entities: { person: 'Esha' }, confidence: 0.9 });
+  const retriever = new SameHitsRetriever([SETI_EVT, VQE_EVT]);
+  const { tracker, events } = setup({ llm, retriever });
+  await tracker.onUpdate('t1', 'draft a message to esha saying');
+  await tracker.idle();
+  await tracker.onUpdate('t1', "draft a message to esha saying i'll present the VQE results at Tuesday");
+  await tracker.idle();
+  const ij = ofType(events, 'interject');
+  assert.equal(ij.length, 1);
+  assert.equal(ij[0]!.text, 'Heads up, the VQE meeting is Monday at 8:30, not Tuesday. Say Monday?');
+});
+
+test('topic match works without a person: the event is found by a title word alone', async () => {
+  const llm = new InstantLlm({ intent: 'add_note', entities: {}, confidence: 0.9 });
+  const retriever = new SameHitsRetriever([VQE_EVT]);
+  const { tracker, events } = setup({ llm, retriever });
+  await tracker.onUpdate('t1', 'note that');
+  await tracker.idle();
+  await tracker.onUpdate('t1', 'note that the VQE meeting is on Tuesday');
+  await tracker.idle();
+  assert.equal(ofType(events, 'interject')[0]?.text, 'Heads up, the VQE meeting is Monday at 8:30, not Tuesday. Say Monday?');
+});
+
+test('topic match: moving an event to a new day is not a contradiction', async () => {
+  const llm = new InstantLlm({ intent: 'reschedule_event', entities: { event: 'SETI research meeting', to_weekday: 'wednesday' }, confidence: 0.9 });
+  const retriever = new SameHitsRetriever([SETI_EVT]);
+  const { tracker, events } = setup({ llm, retriever });
+  await tracker.onUpdate('t1', 'move my');
+  await tracker.idle();
+  await tracker.onUpdate('t1', 'move my SETI research meeting to Wednesday afternoon');
+  await tracker.idle();
+  assert.equal(ofType(events, 'interject').length, 0);
+});
+
+test('topic match fills the event slot with the calendar title before the llm names it', async () => {
+  const llm = new InstantLlm({ intent: 'reschedule_event', entities: { event: 'research meeting' }, confidence: 0.9 });
+  const retriever = new SameHitsRetriever([SETI_EVT]);
+  const { tracker, events } = setup({ llm, retriever });
+  await tracker.onUpdate('t1', 'move my SETI research meeting to Wednesday afternoon');
+  await tracker.idle();
+  const last = ofType(events, 'belief_update').at(-1)!;
+  assert.equal(last.belief.entities.event, 'SETI Research Meeting');
+});
+
+test('draft_message: the words after "saying" become the message slot, verbatim', async () => {
+  const llm = new InstantLlm({ intent: 'draft_message', entities: { person: 'Esha' }, confidence: 0.9 });
+  const { tracker, events } = setup({ llm, retriever: new SameHitsRetriever([]) });
+  await tracker.onUpdate('t1', "Draft a message to Esha saying, I'll present the VQE results at Tuesday's group meeting.");
+  await tracker.idle();
+  const last = ofType(events, 'belief_update').at(-1)!;
+  assert.equal(last.belief.entities.message, "I'll present the VQE results at Tuesday's group meeting.");
 });
