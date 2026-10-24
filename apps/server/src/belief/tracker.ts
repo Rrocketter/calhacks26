@@ -22,6 +22,7 @@ type TurnState = {
   acc: Map<string, { acc: number; hit: RetrievedHit }>;
   topHits: RetrievedHit[];
   mossSupport: number;
+  /** Wall time of the last update's whole Moss batch (all its queries), in ms. */
   mossMs: number;
   llmResult?: IntentResult;
   llmMs?: number;
@@ -82,6 +83,13 @@ function toMossHit(h: RetrievedHit): MossHit {
   return { docId: h.docId, score: h.score, snippet: h.snippet };
 }
 
+function errMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/** Marks a failure from the Moss stage of an update, so it is labeled `moss`. */
+class MossStageError extends Error {}
+
 export class BeliefTracker {
   private readonly cfg: BeliefConfig;
   private readonly extract: (normalizedText: string) => FastEntities;
@@ -122,17 +130,26 @@ export class BeliefTracker {
     const st = this.getOrCreate(turnId);
     const step = st.chain.then(() => this.doUpdate(turnId, st, text));
     st.chain = step.catch((err: unknown) => {
-      const message = err instanceof Error ? err.message : String(err);
-      console.log(`[moss] error ${message}`);
-      this.deps.emit({ type: 'error', source: 'moss', message });
+      if (err instanceof MossStageError) this.reportError('moss', '[moss] error', err.message);
+      else this.reportError('belief', '[belief] update error', errMessage(err));
     });
     return st.chain;
   }
 
+  /** Logs and emits an error event. Never throws, even if the sink does. */
+  private reportError(source: string, logPrefix: string, message: string): void {
+    console.log(`${logPrefix} ${message}`);
+    try {
+      this.deps.emit({ type: 'error', source, message });
+    } catch (err: unknown) {
+      console.log(`[belief] error emit failed: ${errMessage(err)}`);
+    }
+  }
+
   /**
    * Process the eager-end text, then mark the turn finalized. Does not wait for in-flight llm
-   * calls: their results still update the belief (never interject while finalized), and the
-   * turn-end seq bump drops any that land after onTurnEnd starts.
+   * calls: their results still update the belief (never interject while finalized) until
+   * onTurnEnd starts; any that land after that are dropped.
    */
   onEagerEnd(turnId: string, text: string): Promise<void> {
     const st = this.getOrCreate(turnId);
@@ -155,8 +172,9 @@ export class BeliefTracker {
   }
 
   /**
-   * One final llm call over the final text, queued behind pending updates. Its seq is newer
-   * than any streaming call, so a late streaming result is dropped. Deletes the turn state.
+   * One final llm call over the final text, queued behind pending updates. Streaming results
+   * that land once it has started (while it is pending or after) are dropped, so the next
+   * belief_update is the final one. Deletes the turn state.
    */
   onTurnEnd(turnId: string, finalText: string): Promise<Belief> {
     const st = this.turns.get(turnId);
@@ -192,9 +210,7 @@ export class BeliefTracker {
       st.llmMs = latencyMs;
       this.rebuild(turnId, st);
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      console.log(`[llm] error ${message}`);
-      this.deps.emit({ type: 'error', source: 'llm', message });
+      this.reportError('llm', '[llm] error', errMessage(err));
     } finally {
       if (this.turns.get(turnId) === st) this.turns.delete(turnId);
     }
@@ -246,13 +262,17 @@ export class BeliefTracker {
 
     // 1. Moss queries
     const queries = this.buildQueries(norm, fast);
-    const results = await Promise.all(
-      queries.map(async (q) => ({ q, ...(await this.deps.retriever.query(q)) })),
-    );
-    let mossMs = 0;
+    const start = performance.now();
+    let results: { q: string; hits: RetrievedHit[]; latencyMs: number }[];
+    try {
+      results = await this.runQueries(queries);
+    } catch (err: unknown) {
+      throw new MossStageError(errMessage(err));
+    }
+    // belief.latencyMs.moss = wall time of this update's whole Moss batch (all queries, in sequence)
+    st.mossMs = performance.now() - start;
+    console.log(`[moss] step ${st.mossMs.toFixed(1)}ms (${queries.length} queries)`);
     for (const r of results) {
-      logLatency('moss', 'query', r.latencyMs);
-      mossMs = Math.max(mossMs, r.latencyMs);
       this.deps.emit({
         type: 'moss_hits',
         turnId,
@@ -262,7 +282,6 @@ export class BeliefTracker {
       });
       this.deps.emit({ type: 'metric', source: 'moss', label: 'query', ms: r.latencyMs });
     }
-    st.mossMs = mossMs;
 
     // 2. Accumulator with recency decay
     for (const entry of st.acc.values()) entry.acc *= this.cfg.RECENCY_DECAY;
@@ -297,6 +316,18 @@ export class BeliefTracker {
       if (st.llmInFlight >= this.cfg.MAX_LLM_IN_FLIGHT) st.llmPending = true;
       else this.startLlm(turnId, st);
     }
+  }
+
+  /**
+   * One update's Moss queries, run one after another. Measured against Promise.all: about the
+   * same batch wall time, and each query's latencyMs is its own cost (see docs/sdk-notes.md).
+   */
+  private async runQueries(
+    queries: string[],
+  ): Promise<{ q: string; hits: RetrievedHit[]; latencyMs: number }[]> {
+    const out: { q: string; hits: RetrievedHit[]; latencyMs: number }[] = [];
+    for (const q of queries) out.push({ q, ...(await this.deps.retriever.query(q)) });
+    return out;
   }
 
   private buildQueries(norm: string, fast: FastEntities): string[] {
@@ -342,20 +373,24 @@ export class BeliefTracker {
       .classify({ partial: st.rawText, topHits: st.topHits.map(toMossHit) })
       .then(
         ({ result, latencyMs }) => {
+          // the final call owns the turn once onTurnEnd starts
+          if (st.ending || this.turns.get(turnId) !== st) return;
           if (seq < st.lastAppliedSeq) {
             console.log(`[llm] stale seq=${seq} dropped`);
             return;
           }
-          if (this.turns.get(turnId) !== st) return;
           st.lastAppliedSeq = seq;
           st.llmResult = result;
           st.llmMs = latencyMs;
-          this.rebuild(turnId, st);
+          try {
+            this.rebuild(turnId, st);
+          } catch (err: unknown) {
+            // a throw here would reject `p`, which nobody awaits: an unhandled rejection
+            this.reportError('belief', '[belief] error', errMessage(err));
+          }
         },
         (err: unknown) => {
-          const message = err instanceof Error ? err.message : String(err);
-          console.log(`[llm] error ${message}`);
-          this.deps.emit({ type: 'error', source: 'llm', message });
+          this.reportError('llm', '[llm] error', errMessage(err));
         },
       )
       .finally(() => {

@@ -805,3 +805,183 @@ test('fast entities win over llm entities for day and time', async () => {
   await b.tracker.idle();
   assert.equal(b.tracker.current('t1')!.entities.time, 'noon');
 });
+
+// ---- Final review fixes ----
+
+/** Captures console.log lines while fn runs. */
+async function captureLogs(fn: () => Promise<void>): Promise<string[]> {
+  const lines: string[] = [];
+  const orig = console.log;
+  console.log = (...args: unknown[]) => {
+    lines.push(args.map(String).join(' '));
+  };
+  try {
+    await fn();
+  } finally {
+    console.log = orig;
+  }
+  return lines;
+}
+
+test('emit throwing during an llm result does not cause an unhandled rejection', async () => {
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown) => unhandled.push(reason);
+  process.on('unhandledRejection', onUnhandled);
+  try {
+    const llm = new FakeLlm();
+    const events: ServerEvent[] = [];
+    let throwOnBelief = false;
+    const tracker = new BeliefTracker({
+      retriever: new FakeRetriever(),
+      llm,
+      contacts: CONTACTS,
+      emit: (ev) => {
+        if (throwOnBelief && ev.type === 'belief_update') throw new Error('sink closed');
+        events.push(ev);
+      },
+      today: () => new Date(2026, 9, 24),
+    });
+    await tracker.onUpdate('t1', 'draft'); // llm call 0 pending
+    throwOnBelief = true;
+    const logs = await captureLogs(async () => {
+      llm.resolve(0, LOCKED_DRAFT);
+      // no tracker.idle(): its allSettled would mark the rejection handled
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    assert.deepEqual(unhandled, []);
+    assert.ok(logs.some((l) => l.startsWith('[belief] error')), logs.join('\n'));
+    const errs = ofType(events, 'error');
+    assert.equal(errs.length, 1);
+    assert.equal(errs[0]!.source, 'belief');
+    assert.match(errs[0]!.message, /sink closed/);
+    // later updates still work
+    throwOnBelief = false;
+    const before = ofType(events, 'belief_update').length;
+    await tracker.onUpdate('t1', 'draft a');
+    assert.equal(ofType(events, 'belief_update').length, before + 1);
+  } finally {
+    process.off('unhandledRejection', onUnhandled);
+  }
+});
+
+test('emit throwing for every event during an llm result still does not reject', async () => {
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown) => unhandled.push(reason);
+  process.on('unhandledRejection', onUnhandled);
+  try {
+    const llm = new FakeLlm();
+    let broken = false;
+    const tracker = new BeliefTracker({
+      retriever: new FakeRetriever(),
+      llm,
+      contacts: CONTACTS,
+      emit: () => {
+        if (broken) throw new Error('sink closed');
+      },
+      today: () => new Date(2026, 9, 24),
+    });
+    await tracker.onUpdate('t1', 'draft');
+    broken = true; // the error event emit throws too
+    await captureLogs(async () => {
+      llm.resolve(0, LOCKED_DRAFT);
+      // no tracker.idle(): its allSettled would mark the rejection handled
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    assert.deepEqual(unhandled, []);
+  } finally {
+    process.off('unhandledRejection', onUnhandled);
+  }
+});
+
+test('streaming result landing while the final call is pending emits no belief_update', async () => {
+  const llm = new FakeLlm();
+  const { tracker, events } = setup({ llm });
+  await tracker.onUpdate('t1', 'draft'); // streaming call 0
+  const p = tracker.onTurnEnd('t1', 'draft a message to priya');
+  await tick();
+  assert.equal(llm.calls.length, 2);
+  assert.equal(llm.calls[1]!.final, true);
+  const n = ofType(events, 'belief_update').length;
+  llm.resolve(0, { intent: 'find_file', confidence: 0.99 }, 111); // final still pending
+  await tick();
+  await tick();
+  assert.equal(ofType(events, 'belief_update').length, n, 'no transient belief_update');
+  llm.resolve(1, LOCKED_DRAFT, 222);
+  const b = await p;
+  assert.equal(b.intent, 'draft_message');
+  const updates = ofType(events, 'belief_update');
+  assert.equal(updates.length, n + 1);
+  assert.equal(updates.at(-1)!.belief.latencyMs.llm, 222);
+});
+
+test('a non-moss failure in an update is labeled belief, not moss', async () => {
+  const events: ServerEvent[] = [];
+  let throwOnBelief = true;
+  const tracker = new BeliefTracker({
+    retriever: new FakeRetriever(),
+    llm: new FakeLlm(),
+    contacts: CONTACTS,
+    emit: (ev) => {
+      if (throwOnBelief && ev.type === 'belief_update') throw new Error('sink closed');
+      events.push(ev);
+    },
+    today: () => new Date(2026, 9, 24),
+  });
+  const logs = await captureLogs(async () => {
+    await assert.doesNotReject(tracker.onUpdate('t1', 'draft'));
+  });
+  assert.ok(logs.some((l) => l.startsWith('[belief] update error')), logs.join('\n'));
+  assert.ok(!logs.some((l) => l.startsWith('[moss] error')), logs.join('\n'));
+  const errs = ofType(events, 'error');
+  assert.equal(errs.length, 1);
+  assert.equal(errs[0]!.source, 'belief');
+  throwOnBelief = false;
+  await tracker.onUpdate('t1', 'draft a');
+  assert.equal(ofType(events, 'belief_update').length, 1);
+});
+
+test('the error event emit throwing does not break the update chain', async () => {
+  const retriever: Retriever = {
+    async query(text: string) {
+      if (text === 'draft') throw new Error('moss down');
+      return { hits: [], latencyMs: 1 };
+    },
+  };
+  const events: ServerEvent[] = [];
+  const tracker = new BeliefTracker({
+    retriever,
+    llm: new FakeLlm(),
+    contacts: CONTACTS,
+    emit: (ev) => {
+      if (ev.type === 'error') throw new Error('sink closed');
+      events.push(ev);
+    },
+    today: () => new Date(2026, 9, 24),
+  });
+  await captureLogs(async () => {
+    await assert.doesNotReject(tracker.onUpdate('t1', 'draft'));
+  });
+  await tracker.onUpdate('t1', 'draft a');
+  assert.equal(ofType(events, 'belief_update').length, 1);
+});
+
+test('moss is logged once per update as a step; latencyMs.moss is the batch wall time', async () => {
+  const retriever: Retriever = {
+    async query() {
+      await new Promise((r) => setTimeout(r, 15));
+      return { hits: [], latencyMs: 0.5 };
+    },
+  };
+  const { tracker, events } = setup({ retriever });
+  const logs = await captureLogs(async () => {
+    await tracker.onUpdate('t1', 'can you please draft a message to priya'); // 3 queries
+  });
+  const moss = logs.filter((l) => l.startsWith('[moss]'));
+  assert.equal(moss.length, 1, logs.join('\n'));
+  assert.match(moss[0]!, /^\[moss\] step \d+\.\dms \(3 queries\)$/);
+  const b = ofType(events, 'belief_update').at(-1)!.belief;
+  assert.ok(b.latencyMs.moss >= 14, `moss ${b.latencyMs.moss}`);
+  // per-query latency still reported on moss_hits and metric events
+  assert.ok(ofType(events, 'moss_hits').every((e) => e.latencyMs === 0.5));
+  assert.equal(ofType(events, 'metric').length, 3);
+});
