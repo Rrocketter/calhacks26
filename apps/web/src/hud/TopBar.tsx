@@ -65,6 +65,7 @@ export function TopBar({ hud, mode, running, starting, onStart, onStop, onDemo }
         <Counter label="Avg retrieval" short="Avg" value={avg} digits={1} unit="ms" />
         <Counter label="Time to first audio" short="TTFA" value={ttfa === undefined ? null : Math.round(ttfa)} unit="ms" />
       </div>
+      {hud.confirmWindow && <span className="badge on">Listening for yes / no</span>}
       <span className="spacer" />
       {mode === 'live' && running && <LevelMeter />}
       <div className="controls">

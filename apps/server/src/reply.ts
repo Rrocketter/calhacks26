@@ -5,40 +5,36 @@ import { resolveDay } from './belief/entities.js';
 import { requireEnv } from './env.js';
 import { logLatency } from './log.js';
 
-const YES = [
-  'yes',
-  'yeah',
-  'yep',
-  'sure',
-  'ok',
-  'okay',
-  'apply',
-  'apply it',
-  'do it',
-  'yes please',
-  'go ahead',
-];
-const NO = ['no', 'nope', 'cancel', 'dont', "don't", 'no thanks', 'never mind', 'discard'];
+// Spoken confirm lexicon, matched after normalize(). A confirm is made only of phrases from one
+// side (plus filler), so "yeah do it" is a yes and "okay so move my meeting" is neither.
+const YES = ['yes', 'yeah', 'yep', 'yup', 'sure', 'ok', 'okay', 'apply', 'apply it', 'do it', 'go ahead'];
+const NO = ['no', 'nope', "don't", 'dont', 'cancel', 'discard', 'drop it', 'never mind'];
+const FILLER = ['please', 'thanks', 'thank you', 'um', 'uh'];
 
 export const FALLBACK_REPLY = "Sorry, I didn't catch that.";
 export const APPLIED_REPLY = 'Done.';
-export const DISCARDED_REPLY = 'Okay, I dropped it.';
+export const DISCARDED_REPLY = 'Dropped.';
 
+/** true = yes, false = no, null = not a confirm. */
 export function parseConfirm(text: string): boolean | null {
-  const n = normalize(text);
-  if (YES.includes(n)) return true;
-  if (NO.includes(n)) return false;
-  return null;
-}
-
-export function mayBeConfirm(text: string): boolean {
-  const n = normalize(text);
-  if (!n) return true;
-  const words = n.split(' ');
-  return [...YES, ...NO].some((phrase) => {
-    const pw = phrase.split(' ');
-    return words.length <= pw.length && words.every((w, i) => w === pw[i]);
-  });
+  const words = normalize(text).split(' ').filter(Boolean);
+  let yes = false;
+  let no = false;
+  let i = 0;
+  outer: while (i < words.length) {
+    // Longest phrase first, so "drop it" is not read as an unknown "drop".
+    for (const len of [2, 1]) {
+      const phrase = words.slice(i, i + len).join(' ');
+      if (phrase.split(' ').length !== len) continue;
+      if (YES.includes(phrase)) yes = true;
+      else if (NO.includes(phrase)) no = true;
+      else if (!FILLER.includes(phrase)) continue;
+      i += len;
+      continue outer;
+    }
+    return null;
+  }
+  return yes === no ? null : yes;
 }
 
 function capitalize(s: string): string {
@@ -46,32 +42,17 @@ function capitalize(s: string): string {
 }
 
 export function stagedLine(belief: Belief): string {
-  const first = belief.entities.person?.trim().split(/\s+/)[0] || 'them';
-  switch (belief.intent) {
-    case 'reschedule_event': {
-      const day = belief.entities.to_weekday;
-      return `I moved your meeting with ${first}${day ? ` to ${capitalize(day)}` : ''}. Apply?`;
-    }
-    case 'draft_message':
-      return `I drafted a message to ${first}. Apply?`;
-    case 'add_note':
-      return 'I added the note. Apply?';
-    case 'find_file':
-      return 'I found the file. Open it?';
-    default:
-      return "It's ready. Apply?";
-  }
+  return belief.intent === 'find_file' ? 'Open it?' : 'Apply?';
 }
 
 export function correctionAck(value: string): string {
-  return `Okay, ${capitalize(value)}.`;
+  return `${capitalize(value)}.`;
 }
 
 export function claimForInterject(belief: Belief, text: string): Claim | undefined {
+  // The interject only names the known value ("Say Friday?").
   const t = text.toLowerCase();
-  return belief.claims.find(
-    (c) => t.includes(c.said.toLowerCase()) && t.includes(c.known.toLowerCase()),
-  );
+  return belief.claims.find((c) => t.includes(c.known.toLowerCase()));
 }
 
 export function correctBelief(belief: Belief, claim: Claim, today: Date): Belief {

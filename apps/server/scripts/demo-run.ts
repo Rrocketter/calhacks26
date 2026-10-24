@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { parseServerEvent, type ClientEvent, type ServerEvent } from '@ahead/contracts';
 import WebSocket from 'ws';
 import { WORKSPACE_DIR } from '../src/env.js';
+import { CORRECTION_TIMEOUT_MS } from '../src/orchestrator.js';
 
 const DONE_TIMEOUT_MS = 90000;
 const TTS_WAIT_MS = 15000;
@@ -41,7 +42,7 @@ const seenContexts = new Set<string>();
 let stagedCtx: string | null = null; // first fixture-turn TTS context opened after STAGED
 let stagedLineDone = false;
 let correctionExpired = false; // server's correction window closed before we could answer
-const CORRECTION_WINDOW_MS = 8000;
+const CORRECTION_WINDOW_MS = CORRECTION_TIMEOUT_MS;
 let turnEndAt = 0;
 const changed: string[] = [];
 let correctionAfter: number | null = null; // earliest time the correction may be answered
@@ -60,7 +61,7 @@ function answerCorrection(): void {
   corrected = true;
   if (since() > turnEndAt + CORRECTION_WINDOW_MS) {
     correctionExpired = true;
-    console.log('WARN: correction window (8000 ms after turn_end) already passed; not answering, treating as not accepted');
+    console.log(`WARN: correction window (${CORRECTION_WINDOW_MS} ms after turn_end) already passed; not answering, treating as not accepted`);
     return;
   }
   const yes = !NO_CORRECT;

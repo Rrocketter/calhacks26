@@ -4,7 +4,7 @@ import type { Belief } from '@ahead/contracts';
 import { normalize } from '../src/belief/normalize.js';
 import { printVerdict, ReplayTap } from './replay.js';
 
-const DEMO_TEXT = "Heads up, Priya's meeting is Friday, not Thursday. Say Friday?";
+const DEMO_TEXT = 'Say Friday?';
 
 function belief(intent: Belief['intent'], person?: string): Belief {
   return {
@@ -75,7 +75,7 @@ test('wrong locked person fails', () => {
 
 test('wrong interject text fails', () => {
   const tap = goodTap();
-  tap.interject = { ...tap.interject!, text: "Heads up, Priya's meeting is Friday, not Thursday." };
+  tap.interject = { ...tap.interject!, text: 'Say Thursday?' };
   assert.equal(verdict(tap).pass, false);
 });
 

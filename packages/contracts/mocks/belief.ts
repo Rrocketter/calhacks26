@@ -2,8 +2,7 @@ import type { Belief, Claim, MossHit, ServerEvent } from '../src/index.js';
 import { MOCK_MOSS_DOCS } from './moss.js';
 
 /** PLAN.md section 5, utterance 1. */
-export const DEMO_INTERJECTION =
-  'Quick note, your meeting with Priya is Friday at two, not Thursday. Want me to say Friday?';
+export const DEMO_INTERJECTION = 'Say Friday?';
 
 const hit = (docId: string, score: number): MossHit => {
   const doc = MOCK_MOSS_DOCS.find((d) => d.docId === docId);

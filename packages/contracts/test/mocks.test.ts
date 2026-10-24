@@ -123,7 +123,7 @@ describe('mockBeliefStream', () => {
     const interjects = events.filter((e) => e.type === 'interject');
     expect(interjects).toHaveLength(1);
     expect(interjects[0]?.type === 'interject' && interjects[0].text).toBe(
-      'Quick note, your meeting with Priya is Friday at two, not Thursday. Want me to say Friday?',
+      'Say Friday?',
     );
     const claimEventIdx = events.findIndex((e) => e.type === 'belief_update' && e.belief.claims.length > 0);
     expect(events.findIndex((e) => e.type === 'interject')).toBeGreaterThan(claimEventIdx);

@@ -117,7 +117,7 @@ describe('hudReducer', () => {
       start('t1'),
       partial('t1', TEXT),
       { type: 'belief_update', turnId: 't1', belief: b },
-      { type: 'interject', turnId: 't1', text: "Heads up, Priya's meeting is Friday, not Thursday. Say Friday?" },
+      { type: 'interject', turnId: 't1', text: 'Say Friday?' },
     ]);
     expect(s.interject?.said).toBe('Thursday');
     expect(s.interject?.wordIndex).toBe(9);
@@ -193,6 +193,14 @@ describe('hudReducer', () => {
     expect(s.tools).toEqual([]);
     expect(s.diffs).toEqual([]);
     expect(s.result).toBeNull();
+  });
+
+  it('opens and closes the confirm window from the confirm_window metric', () => {
+    let s = run([{ type: 'metric', source: 'ink', label: 'confirm_window', ms: 6000 }]);
+    expect(s.confirmWindow).toBe(true);
+    expect(s.ttfa).toEqual({});
+    s = run([{ type: 'metric', source: 'ink', label: 'confirm_window', ms: 0 }], s);
+    expect(s.confirmWindow).toBe(false);
   });
 
   it('tracks ttfa, errors and reset', () => {

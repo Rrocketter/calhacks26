@@ -35,6 +35,16 @@ test('extractor matches full name, am/pm times, today and tomorrow', () => {
   assert.equal(extract('open the budget').file, 'budget');
 });
 
+test('extractor reads morning, noon, afternoon and evening as a time', () => {
+  const resched = extract('move my friday meeting with priya to monday morning');
+  assert.deepEqual(resched, { person: 'Priya Shah', day: 'friday', time: '09:00' });
+  assert.equal(extract('lunch at noon tomorrow').time, '12:00');
+  assert.equal(extract('call marcus this afternoon').time, '14:00');
+  assert.equal(extract('dinner on friday evening').time, '18:00');
+  assert.equal(extract('see her monday morning at 10').time, '10', 'a clock time wins');
+  assert.equal(extract('mornings are busy').time, undefined, 'whole words only');
+});
+
 test('resolveDay uses local dates', () => {
   const today = new Date(2026, 9, 24); // Saturday
   assert.deepEqual(resolveDay('thursday', today), { weekday: 'thursday', date_iso: '2026-10-29' });
