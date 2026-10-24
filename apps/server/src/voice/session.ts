@@ -76,7 +76,12 @@ export class VoiceSession {
       if (ev.type === 'turn_start') {
         const cancelled = this.speaker.cancelActive();
         if (cancelled !== null) this.clock.onCancel(cancelled, this.now());
-        if (this.mockBelief) void this.runMockBelief(ev.turnId);
+        if (this.mockBelief) {
+          this.runMockBelief(ev.turnId).catch((err: unknown) => {
+            console.error(`[voice] mock belief error ${String(err)}`);
+            this.send({ type: 'error', message: String(err), source: 'voice' });
+          });
+        }
       } else if (ev.type === 'turn_end') {
         this.speaker.speak(TURN_END_REPLY, { interrupt: false, turnId: ev.turnId });
       }

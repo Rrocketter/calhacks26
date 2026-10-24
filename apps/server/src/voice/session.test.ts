@@ -139,14 +139,52 @@ test('new turn cancels the active reply', () => {
   assert.equal(cancels.length, before + 1);
 });
 
+async function waitFor(cond: () => boolean, timeoutMs = 2000): Promise<void> {
+  const start = Date.now();
+  while (!cond() && Date.now() - start < timeoutMs) await new Promise((r) => setTimeout(r, 5));
+}
+
 test('mock belief drives the interject path', async () => {
   const { session, sent, speaks } = setup({ mockBelief: true, mockSpeed: 50, useRealClock: true });
   session.handleInk({ type: 'turn.start' });
-  await new Promise((r) => setTimeout(r, 150));
+  await waitFor(() => sent.some((e) => e.type === 'interject'));
   assert.ok(sent.some((e) => e.type === 'moss_hits'));
   assert.ok(sent.some((e) => e.type === 'belief_update'));
   const interjects = sent.filter((e) => e.type === 'interject');
   assert.equal(interjects.length, 1);
   assert.equal(interjects[0]?.type === 'interject' && interjects[0].text, DEMO_INTERJECTION);
   assert.ok(speaks.some((s) => s.opts.interrupt));
+});
+
+test('mock belief errors are reported, not thrown', async () => {
+  const sent: ServerEvent[] = [];
+  const unhandled: unknown[] = [];
+  const onUnhandled = (e: unknown) => unhandled.push(e);
+  process.on('unhandledRejection', onUnhandled);
+  const session = new VoiceSession({
+    send: (e) => sent.push(e),
+    ink: { sendPcm: () => {} },
+    speaker: {
+      speak: () => {
+        throw new Error('boom');
+      },
+      cancelActive: () => null,
+    },
+    mockBelief: true,
+    mockSpeed: 50,
+  });
+  const origError = console.error;
+  console.error = () => {};
+  try {
+    session.handleInk({ type: 'turn.start' });
+    await waitFor(() => sent.some((e) => e.type === 'error'));
+    await new Promise((r) => setTimeout(r, 20));
+  } finally {
+    console.error = origError;
+    process.off('unhandledRejection', onUnhandled);
+  }
+  const err = sent.find((e) => e.type === 'error');
+  assert.equal(err?.type === 'error' && err.source, 'voice');
+  assert.match(err?.type === 'error' ? err.message : '', /boom/);
+  assert.equal(unhandled.length, 0);
 });
