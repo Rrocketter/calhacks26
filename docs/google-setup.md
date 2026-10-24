@@ -12,7 +12,7 @@ You need about 10 minutes and a Google account. All steps below happen in a brow
 ## What gets imported
 
 - Calendar: events on your primary calendar from 30 days ago to 60 days ahead.
-- Gmail: your 100 most recent threads. For each thread it keeps the subject, sender, date, and the first 500 characters of the first message. Attachments are never downloaded.
+- Gmail: your 60 most recent threads. For each thread it keeps the subject, sender, recipients, date, and Gmail's short preview snippet of the first message (about 200 characters). Message bodies and attachments are never downloaded.
 - Contacts: built from event attendees and email senders. Your own address and no-reply senders are left out.
 
 Before anything reaches the search corpus:
@@ -111,15 +111,17 @@ The terminal then prints something like:
 
 ```
 [google] calendar events 310.4ms
-[google] gmail 100 threads 2841.0ms
+[google] gmail 60 threads 6120.0ms
 [google] events 42 (of 42 fetched)
-[google] threads 100, kept 87, skipped 13 by subject blocklist
+[google] threads 60, kept 52, skipped 8 by subject blocklist
 [google] contacts 55
 [corpus] wrote 184 docs
 [moss] createIndex 184 docs (upload+build) 3400.2ms
 ```
 
 The last part rebuilds the Moss index `ahead-corpus` from the new corpus.
+
+Gmail limits how fast one user can read mail, so threads are fetched 10 at a time with a one-second pause. If Google still says the quota is exceeded, the script waits and retries on its own (you will see `[google] rate limited, retry ...`). If it gives up, just run it again: calendar data fetched in the last 6 hours is reused instead of downloaded again. Use `pnpm import:google --fresh` to force a full refetch.
 
 The token is saved to `~/.ahead/google-token.json` (outside the repo, owner-only permissions), so later runs skip the browser. Google expires testing-mode tokens after 7 days. When that happens, delete the token file and run the import again.
 
@@ -174,4 +176,5 @@ You can also delete the `ahead-import` project in the Cloud console.
 - **"is not a Desktop app client"**: you created a Web application client. Create a new one with type Desktop app.
 - **"Request had insufficient authentication scopes"**: a box was left unticked on the consent page. Delete `~/.ahead/google-token.json` and run again.
 - **"invalid_grant"**: the cached token expired or was revoked. Delete `~/.ahead/google-token.json` and run again.
+- **"Quota exceeded ... Units per minute per user"** after all retries: wait a minute and run again. The calendar is not refetched.
 - **"Gmail API has not been used in project ..."**: the API is off. Redo Step 2 and wait a minute.

@@ -12,6 +12,7 @@ import path from 'node:path';
 import { google, Auth } from 'googleapis';
 import { REPO_ROOT } from '../src/env.js';
 import { logLatency } from '../src/log.js';
+import { withRetry } from './google-retry.js';
 import { deriveContacts, shapeEvents, shapeThreads, toCorpus, type GEvent, type GThread } from './google-shape.js';
 
 const SCOPES = [
@@ -24,7 +25,21 @@ const TOKEN_FILE = path.join(AHEAD_DIR, 'google-token.json');
 const OUT_DIR = path.join(REPO_ROOT, 'data', 'google');
 const CORPUS = path.join(REPO_ROOT, 'data', 'corpus', 'corpus.json');
 const DAY = 24 * 60 * 60 * 1000;
-const THREADS = 100;
+const THREADS = 60;
+// threads.get costs 10 quota units; 10 per batch with a pause stays far below the per-user limit.
+const BATCH = 10;
+const BATCH_PAUSE_MS = 1000;
+// Calendar fetched by a run that then failed (e.g. on Gmail quota) is reused by the retry.
+const CAL_CACHE = path.join(OUT_DIR, '.calendar-partial.json');
+const CAL_CACHE_MAX_AGE = 6 * 60 * 60 * 1000;
+
+type CalCache = { fetchedAt: number; tz: string; items: GEvent[] };
+
+function readCalCache(): CalCache | undefined {
+  if (process.argv.includes('--fresh') || !fs.existsSync(CAL_CACHE)) return undefined;
+  const c = JSON.parse(fs.readFileSync(CAL_CACHE, 'utf8')) as CalCache;
+  return Date.now() - c.fetchedAt < CAL_CACHE_MAX_AGE ? c : undefined;
+}
 
 async function timed<T>(source: string, label: string, fn: () => Promise<T>): Promise<T> {
   const t = performance.now();
@@ -104,6 +119,31 @@ async function authorize(): Promise<Auth.OAuth2Client> {
   return client;
 }
 
+function fetchEvents(calendar: ReturnType<typeof google.calendar>, tz: string): Promise<GEvent[]> {
+  const now = Date.now();
+  return timed('google', 'calendar events', async () => {
+    const out: GEvent[] = [];
+    let pageToken: string | undefined;
+    do {
+      const { data } = await withRetry(() =>
+        calendar.events.list({
+          calendarId: 'primary',
+          timeMin: new Date(now - 30 * DAY).toISOString(),
+          timeMax: new Date(now + 60 * DAY).toISOString(),
+          singleEvents: true,
+          orderBy: 'startTime',
+          timeZone: tz,
+          maxResults: 250,
+          pageToken,
+        }),
+      );
+      out.push(...(data.items ?? []));
+      pageToken = data.nextPageToken ?? undefined;
+    } while (pageToken);
+    return out;
+  });
+}
+
 async function main(): Promise<void> {
   if (process.env.IMPORT_GOOGLE !== '1') {
     console.error('[google] refusing to run: set IMPORT_GOOGLE=1 (see docs/google-setup.md)');
@@ -113,38 +153,35 @@ async function main(): Promise<void> {
   const calendar = google.calendar({ version: 'v3', auth });
   const gmail = google.gmail({ version: 'v1', auth });
 
-  const tz = (await timed('google', 'calendar tz', () => calendar.calendars.get({ calendarId: 'primary' }))).data
-    .timeZone ?? 'UTC';
-  const now = Date.now();
-  const items: GEvent[] = await timed('google', 'calendar events', async () => {
-    const out: GEvent[] = [];
-    let pageToken: string | undefined;
-    do {
-      const { data } = await calendar.events.list({
-        calendarId: 'primary',
-        timeMin: new Date(now - 30 * DAY).toISOString(),
-        timeMax: new Date(now + 60 * DAY).toISOString(),
-        singleEvents: true,
-        orderBy: 'startTime',
-        timeZone: tz,
-        maxResults: 250,
-        pageToken,
-      });
-      out.push(...(data.items ?? []));
-      pageToken = data.nextPageToken ?? undefined;
-    } while (pageToken);
-    return out;
-  });
+  const cached = readCalCache();
+  let tz: string;
+  let items: GEvent[];
+  if (cached) {
+    ({ tz, items } = cached);
+    console.log(`[google] calendar reused from earlier run (${items.length} events, --fresh to refetch)`);
+  } else {
+    tz = (await timed('google', 'calendar tz', () => withRetry(() => calendar.calendars.get({ calendarId: 'primary' }))))
+      .data.timeZone ?? 'UTC';
+    items = await fetchEvents(calendar, tz);
+    fs.mkdirSync(OUT_DIR, { recursive: true });
+    fs.writeFileSync(CAL_CACHE, JSON.stringify({ fetchedAt: Date.now(), tz, items } satisfies CalCache) + '\n', { mode: 0o600 });
+  }
 
-  const self = (await timed('google', 'gmail profile', () => gmail.users.getProfile({ userId: 'me' }))).data
-    .emailAddress ?? '';
+  const self = (await timed('google', 'gmail profile', () => withRetry(() => gmail.users.getProfile({ userId: 'me' }))))
+    .data.emailAddress ?? '';
   const threads: GThread[] = await timed('google', `gmail ${THREADS} threads`, async () => {
-    const { data } = await gmail.users.threads.list({ userId: 'me', maxResults: THREADS });
+    const { data } = await withRetry(() => gmail.users.threads.list({ userId: 'me', maxResults: THREADS }));
     const ids = (data.threads ?? []).map((t) => t.id!).filter(Boolean);
     const out: GThread[] = [];
-    for (let i = 0; i < ids.length; i += 10) {
+    for (let i = 0; i < ids.length; i += BATCH) {
+      if (i) await new Promise((r) => setTimeout(r, BATCH_PAUSE_MS));
+      // metadata = headers + snippet; bodies are not downloaded.
       const batch = await Promise.all(
-        ids.slice(i, i + 10).map((id) => gmail.users.threads.get({ userId: 'me', id, format: 'full' })),
+        ids.slice(i, i + BATCH).map((id) =>
+          withRetry(() =>
+            gmail.users.threads.get({ userId: 'me', id, format: 'metadata', metadataHeaders: ['Subject', 'From', 'To', 'Date'] }),
+          ),
+        ),
       );
       out.push(...batch.map((r) => r.data));
     }
@@ -172,6 +209,7 @@ async function main(): Promise<void> {
     stdio: 'inherit',
     env: { ...process.env, MOSS_DISABLE_TELEMETRY: '1' },
   });
+  fs.rmSync(CAL_CACHE, { force: true });
 }
 
 main().catch((err: unknown) => {
