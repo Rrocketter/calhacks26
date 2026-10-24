@@ -125,7 +125,7 @@ export class VoiceSession {
       if (ev.type === 'turn_end' && finalText !== '') {
         if (this.onTurnEnd) this.onTurnEnd(ev.turnId, finalText);
         else {
-          this.send({ type: 'assistant_reply', turnId: ev.turnId, text: TURN_END_REPLY, kind: 'ack' });
+          this.send({ type: 'assistant_reply', turnId: ev.turnId, text: TURN_END_REPLY, kind: 'answer' });
           this.speaker.speak(TURN_END_REPLY, { interrupt: false, turnId: ev.turnId });
         }
       }

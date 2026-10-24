@@ -198,7 +198,11 @@ function answerCard(input: CardInput): Card | null {
 /** The card for what is staged (or answered) right now, or null when there is nothing to render. */
 export function buildCard(input: CardInput): Card | null {
   const { belief, diffs } = input;
-  if (belief?.intent === 'lookup') return answerCard(input);
+  // A lookup belief left over from the last turn has no final yet for this one: fall through.
+  if (belief?.intent === 'lookup') {
+    const answer = answerCard(input);
+    if (answer) return answer;
+  }
   for (const { file, diff } of diffs) {
     const card = file.startsWith('messages/')
       ? messageCard(file, diff, belief)

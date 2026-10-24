@@ -87,8 +87,9 @@ export function BeliefPanel({ hud, view }: { hud: HudState; view: View }) {
               ))}
             </div>
           )}
-      {product && ghost && ghostO > 0 && (
-        <div className="belief-ghost" style={{ '--ghost': ghostO } as CSSProperties}>
+      {ghost && ghostO > 0 && (
+        // Mounted in both views (hidden in Engineering) so a view flip does not move the panel.
+        <div className="belief-ghost eng-hidden" style={{ '--ghost': ghostO } as CSSProperties}>
           <span className="ghost-tag">predicting</span>
           {ghost.map((p, i) => (
             <Fragment key={`${i}:${p}`}>

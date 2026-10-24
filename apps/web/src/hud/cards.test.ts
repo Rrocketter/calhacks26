@@ -230,8 +230,8 @@ describe('buildCard', () => {
         belief: belief('lookup'),
         finals: [{ turnId: 't1', text: 'When is my Math 52 homework due?', highlight: null }],
         replies: [
-          { turnId: 't0', text: 'Done.', kind: 'ack' },
-          { turnId: 't1', text: 'Monday, October 26 at 11:59 PM.', kind: 'answer' },
+          { seq: 1, turnId: 't0', text: 'Done.', kind: 'ack' },
+          { seq: 2, turnId: 't1', text: 'Monday, October 26 at 11:59 PM.', kind: 'answer' },
         ],
       }),
     );
@@ -241,6 +241,11 @@ describe('buildCard', () => {
   it('shows the lookup question before the answer lands', () => {
     const card = buildCard(input({ belief: belief('lookup'), finals: [{ turnId: 't1', text: 'What did I tell Esha?', highlight: null }] }));
     expect(card).toEqual({ kind: 'answer', question: 'What did I tell Esha?', answer: null });
+  });
+
+  it('a lookup belief left from the last turn does not hide this turn\'s staged draft', () => {
+    const card = buildCard(input({ turnId: 't2', belief: belief('lookup'), diffs: [{ file: 'messages/outbox/esha.md', diff: OUTBOX }] }));
+    expect(card).toMatchObject({ kind: 'message', to: 'Esha Telang' });
   });
 
   it('is null with nothing to show', () => {

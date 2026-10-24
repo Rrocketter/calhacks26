@@ -563,10 +563,14 @@ body {
 .finals {
   display: flex;
   flex-direction: column;
+  justify-content: flex-end;
   gap: 10px;
   font-size: 20px;
   color: var(--dim);
-  flex: none;
+  /* With captions under each turn this can outgrow the panel: the oldest lines give way at the top. */
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .finals mark {
@@ -575,6 +579,7 @@ body {
 
 .partial {
   position: relative;
+  flex: none;
   font-size: clamp(26px, 2.3vw, 34px);
   line-height: 1.32;
   font-weight: 520;
@@ -1771,6 +1776,21 @@ kbd {
 }
 
 .hud[data-view='product'] .eng-only {
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity 320ms var(--ease),
+    visibility 0s 320ms;
+}
+
+/* Product-only content keeps its box in Engineering, so flipping views never moves what is below it. */
+.eng-hidden {
+  transition:
+    opacity 320ms var(--ease),
+    visibility 0s;
+}
+
+.hud[data-view='engineering'] .eng-hidden {
   opacity: 0;
   visibility: hidden;
   transition:

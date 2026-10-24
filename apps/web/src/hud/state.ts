@@ -18,7 +18,7 @@ export type Interject = {
   said: string | null;
   wordIndex: number | null;
 };
-export type Reply = { turnId: string; text: string; kind: ReplyKind };
+export type Reply = { seq: number; turnId: string; text: string; kind: ReplyKind }; // seq: stable caption key
 export type HudState = {
   turnId: string | null; // current turn: promoted from turn_start once it speaks
   // Ink can send a bare turn_start right after a timeout turn_end, so a new turn only takes
@@ -284,7 +284,10 @@ export function hudReducer(s: HudState, a: HudAction): HudState {
     case 'error':
       return { ...s, error: `${a.source ?? 'server'}: ${a.message}` };
     case 'assistant_reply':
-      return { ...s, replies: [...s.replies, { turnId: a.turnId, text: a.text, kind: a.kind }].slice(-REPLIES_MAX) };
+      return {
+        ...s,
+        replies: [...s.replies, { seq: (s.replies.at(-1)?.seq ?? 0) + 1, turnId: a.turnId, text: a.text, kind: a.kind }].slice(-REPLIES_MAX),
+      };
     case 'tts_audio_chunk':
       return s;
   }

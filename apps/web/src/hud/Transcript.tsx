@@ -93,8 +93,8 @@ function Captions({ replies, turnId, callout }: { replies: Reply[]; turnId: stri
   if (shown.length === 0) return null;
   return (
     <div className="captions">
-      {shown.map((r, i) => (
-        <div className={`caption ${r.kind}`} key={`${i}:${r.text}`}>
+      {shown.map((r) => (
+        <div className={`caption ${r.kind}`} key={r.seq}>
           <span className="caption-who">AHEAD</span>
           {r.text}
         </div>

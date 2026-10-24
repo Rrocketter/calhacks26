@@ -41,6 +41,8 @@ export function ExecutorPanel({ hud, view, canSend, onConfirm }: Props) {
     stale && result ? { tag: 'STALE', note: result.summary } : rolledBack ? { tag: 'ROLLED BACK' } : null;
   const product = view === 'product';
   const card = buildCard(hud);
+  // A lookup turn never runs Droid, so droidTurnId still names the last Droid turn; its answer is current.
+  const dimmed = prior && card?.kind !== 'answer';
   // A lookup answer is not something to apply, so it never carries an outcome stamp.
   const stamp =
     !card || card.kind === 'answer' || prior
@@ -53,13 +55,13 @@ export function ExecutorPanel({ hud, view, canSend, onConfirm }: Props) {
             ? { text: 'Discarded', tone: 'bad' as const }
             : null;
   return (
-    <section className={prior ? 'panel executor prior' : 'panel executor'}>
+    <section className={dimmed ? 'panel executor prior' : 'panel executor'}>
       <div className="panel-head">
         <span className="label">
           <span className="idx">03</span>
           {product ? 'Result' : 'Executor'}
         </span>
-        {prior && <span className="tag dim">PREVIOUS TURN</span>}
+        {dimmed && <span className="tag dim">PREVIOUS TURN</span>}
         {/* Same name the server's executor/git.ts gives the branch */}
         {hud.droidTurnId && <span className={['ms num branch eng-only', (ended || prior) && 'gone'].filter(Boolean).join(' ')}>spec/{hud.droidTurnId.replace(/[^A-Za-z0-9._-]/g, '-')}</span>}
       </div>
