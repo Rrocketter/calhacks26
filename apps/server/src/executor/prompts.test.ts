@@ -128,3 +128,16 @@ test('multi-line entity values and keys render on one line', () => {
 test('entity values with replacement patterns render verbatim', () => {
   assert.match(phase2Prompt(belief('add_note', { cost: 'cost $& more $1 $$' }), NOW), /cost: cost \$& more \$1 \$\$/);
 });
+
+test('every phase2 tells Droid to stop right after the edit (find_file: reply with the path)', () => {
+  const STOP = 'Stop immediately after the edit. Do not re-read the file or update the plan.';
+  const STOP_FIND = 'Reply immediately with the path. Do not update the plan.';
+  for (const intent of SPECULATIVE) {
+    const p2 = phase2Prompt(belief(intent), NOW);
+    const p1 = phase1Prompt(belief(intent));
+    const line = intent === 'find_file' ? STOP_FIND : STOP;
+    assert.ok(p2.includes(line), intent);
+    assert.ok(!p1.includes(line), `${intent} phase1`);
+    assert.ok(p2.endsWith(CLOSING), intent);
+  }
+});

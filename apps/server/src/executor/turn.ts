@@ -17,10 +17,13 @@ export interface TurnOptions {
   guard: Guard;
   emit: Emit;
   graceMs?: number;
+  // Fired, not awaited, when a Create/Edit/ApplyPatch result returns without error.
+  onWrite?: () => void | Promise<void>;
 }
 
 const DEFAULT_GRACE_MS = 1500;
 const SUMMARY_CAP = 500;
+const WRITE_TOOLS = new Set(['Create', 'Edit', 'ApplyPatch']);
 
 function emitTool(emit: Emit, turnId: string, payload: DroidToolPayload, denied: boolean): void {
   emit({ type: 'droid_event', turnId, kind: 'tool', payload, ...(denied ? { denied: true } : {}), ts: Date.now() });
@@ -199,6 +202,12 @@ export async function runTurn(
         const name = ev.toolName || calls.get(ev.toolUseId) || 'tool';
         console.log(`[droid] result ${name} ${ev.isError ? 'error' : 'ok'} ${since()}`);
         send('step', { text: `${name} ${ev.isError ? 'error' : 'ok'}` });
+        const onWrite = opts.onWrite;
+        if (onWrite && !ev.isError && !aborted && WRITE_TOOLS.has(name)) {
+          void Promise.resolve()
+            .then(onWrite)
+            .catch((e: unknown) => console.log(`[droid] onWrite failed (${e instanceof Error ? e.name : 'unknown'})`));
+        }
       } else if (ev.type === DroidMessageType.Error) {
         console.log(`[droid] error ${ev.errorType ?? ''} msgLen=${ev.message.length}`);
       } else if (ev.type === DroidMessageType.Result) {

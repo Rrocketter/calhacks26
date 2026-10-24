@@ -11,5 +11,6 @@ Make the edit now in calendar.json.
 - Keep the event's `id`, `title`, `attendees`, `location` and duration. Change only `start` and `end`. If no new time is given, keep the old time of day.
 - Write ISO 8601 with the US/Pacific offset: -07:00 before 2026-11-01, -08:00 from 2026-11-01. Example: 2026-10-26T09:00:00-07:00.
 - Use the Edit tool on calendar.json in place. Never recreate the whole file. The file must stay valid JSON.
+Stop immediately after the edit. Do not re-read the file or update the plan.
 Reply with one sentence saying what moved.
 Do not run commands. Do not touch files outside this workspace.

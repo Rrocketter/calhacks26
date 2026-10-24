@@ -58,6 +58,15 @@ export class WorkspaceGit {
     return out;
   }
 
+  // Uncommitted state vs main, staged first so files Droid created (untracked) show up too.
+  async diffWorkingTree(): Promise<{ file: string; diff: string }[]> {
+    await this.git('add', '-A');
+    const names = (await this.git('diff', '--cached', '--name-only', 'main')).split('\n').filter(Boolean);
+    const out: { file: string; diff: string }[] = [];
+    for (const file of names) out.push({ file, diff: await this.git('diff', '--cached', 'main', '--', file) });
+    return out;
+  }
+
   async merge(turnId: string): Promise<void> {
     const b = this.branchName(turnId);
     await this.git('checkout', 'main');

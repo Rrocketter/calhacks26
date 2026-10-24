@@ -134,3 +134,18 @@ test('diffFiles returns non-ASCII paths unquoted (core.quotePath=false)', async 
   assert.equal(diffs[0]!.file, 'notes/café.md');
   assert.match(diffs[0]!.diff, /\+hello/);
 });
+
+test('diffWorkingTree covers modified and untracked files and matches diffFiles after commit', async () => {
+  const { root, git } = makeRepo();
+  await git.prepare('t1');
+  assert.deepEqual(await git.diffWorkingTree(), []);
+  editCalendar(root);
+  fs.mkdirSync(path.join(root, 'notes'));
+  fs.writeFileSync(path.join(root, 'notes', 'new.md'), '# new\n');
+  const early = await git.diffWorkingTree();
+  assert.deepEqual(early.map((d) => d.file), ['calendar.json', 'notes/new.md']);
+  assert.match(early[0]!.diff, /\+.*2026-11-02/);
+  assert.match(early[1]!.diff, /new file mode[\s\S]*\+# new/);
+  await git.commitAll('phase 2');
+  assert.deepEqual(await git.diffFiles('t1'), early);
+});

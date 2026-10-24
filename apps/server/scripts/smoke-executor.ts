@@ -121,7 +121,10 @@ async function main(): Promise<void> {
     const metrics: Record<string, number> = {};
     let invalid = 0;
     let lockAt: number;
+    let eagerAt: number | undefined;
+    // First diff event (early diff, R24) and the result event (end-of-phase diff point).
     let diffAt: number | null = null;
+    let resultAt: number | null = null;
     const emit = (ev: ServerEvent): void => {
       events.push(ev);
       if (parseServerEvent(JSON.stringify(ev)) === null) {
@@ -131,6 +134,7 @@ async function main(): Promise<void> {
       }
       if (ev.type === 'metric' && ev.source === 'droid' && !(ev.label in metrics)) metrics[ev.label] = ev.ms;
       if (ev.type === 'droid_event' && ev.kind === 'diff' && diffAt === null) diffAt = performance.now();
+      if (ev.type === 'droid_event' && ev.kind === 'result' && resultAt === null) resultAt = performance.now();
       console.log(`[event] ${describe(ev, ws)}`);
     };
     const exec = createDroidExecutor(emit);
@@ -143,6 +147,7 @@ async function main(): Promise<void> {
       lockAt = performance.now();
       spec.onServerEvent({ type: 'belief_update', turnId, belief: BELIEF });
       await spec.idle(); // Phase 1 done before eager end, so the two phases time separately.
+      eagerAt = performance.now();
       spec.onServerEvent({ type: 'turn_eager_end', turnId, text: '', ts: Date.now() });
       await spec.idle();
       spec.onServerEvent({ type: 'turn_end', turnId, ts: Date.now() });
@@ -159,10 +164,15 @@ async function main(): Promise<void> {
       if (!ok) fail.push(label);
     };
     const diffs = events.filter((e): e is DroidEv => e.type === 'droid_event' && e.kind === 'diff');
-    const calDiff = diffs.find((d) => (d.payload as { file?: string }).file === 'calendar.json');
+    // Last one: an early diff may be re-emitted at turn end.
+    const calDiff = diffs.filter((d) => (d.payload as { file?: string }).file === 'calendar.json').at(-1);
     const states = events.flatMap((e) => (e.type === 'state_change' ? [e.state] : []));
     const finalState = states.at(-1);
-    const lockToDiff = diffAt === null ? null : (diffAt as number) - lockAt;
+    // belief-lock-to-diff keeps its old meaning: the turn-end diff, emitted right before `result`.
+    const lockToDiff = resultAt === null ? null : (resultAt as number) - lockAt;
+    const lockToFirstDiff = diffAt === null ? null : (diffAt as number) - lockAt;
+    const phase2ToFirstDiff = diffAt === null || eagerAt === undefined ? null : (diffAt as number) - eagerAt;
+    const fmt = (v: number | null): string => (v === null ? 'n/a' : `${Math.round(v)}ms`);
 
     check(invalid === 0, `all events valid (invalid=${invalid})`);
     check(calDiff !== undefined, 'diff event for calendar.json');
@@ -190,7 +200,8 @@ async function main(): Promise<void> {
     const ms = (label: string): string => (label in metrics ? `${Math.round(metrics[label]!)}ms` : 'n/a');
     console.log(
       `[latency] ${name} createSession=${ms('createSession')} phase1=${ms('phase1')} phase2=${ms('phase2')} diff=${ms('diff')} ` +
-        `belief-lock-to-diff=${lockToDiff === null ? 'n/a' : `${Math.round(lockToDiff)}ms`} ${apply ? `commit=${ms('commit')}` : `rollback=${ms('rollback')}`}`,
+        `phase2-to-first-diff=${fmt(phase2ToFirstDiff)} lock-to-first-diff=${fmt(lockToFirstDiff)} ` +
+        `belief-lock-to-diff=${fmt(lockToDiff)} ${apply ? `commit=${ms('commit')}` : `rollback=${ms('rollback')}`}`,
     );
     const pass = fail.length === 0;
     console.log(`${pass ? 'PASS' : 'FAIL'} run ${name}${pass ? '' : `: ${fail.join('; ')}`}`);

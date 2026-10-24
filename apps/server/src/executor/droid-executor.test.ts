@@ -45,8 +45,12 @@ const ev = (e: Record<string, unknown>): DroidStreamEvent => e as unknown as Dro
 const call = (toolUseId: string, name: string, input: unknown) => ev({ type: DroidMessageType.ToolCall, toolUseId, name, input });
 const result = (subtype: string) => ev({ type: DroidMessageType.Result, subtype, text: '' });
 const text = (t: string) => ev({ type: DroidMessageType.AssistantTextDelta, text: t });
+const toolResult = (toolUseId: string, toolName: string) =>
+  ev({ type: DroidMessageType.ToolResult, toolUseId, toolName, isError: false, content: 'body' });
 
-type Phase2Mode = 'edit' | 'block' | 'throw';
+// edit: Edit call, no ToolResult (diff only at turn end). early: Edit + ToolResult, then afterWrite.
+// early-changed: like early, then a second change before the Result. create: Create of notes/new.md.
+type Phase2Mode = 'edit' | 'block' | 'throw' | 'early' | 'early-changed' | 'create';
 interface FakeSession extends DroidLike {
   prompts: string[];
   calls: string[];
@@ -60,6 +64,10 @@ interface Factory {
   phase2: Phase2Mode[];
   // Phase 1 behaviour per call, in order; normal once exhausted.
   phase1: 'block'[];
+  // Awaited by the early modes after the write's ToolResult, before the Result.
+  afterWrite: () => Promise<void>;
+  // Called by the early modes just before the write's ToolResult is yielded.
+  beforeWriteResult: () => void;
   // When set, openSession waits on it before returning a session.
   openGate: Promise<void> | null;
   phase2Started: () => Promise<void>;
@@ -84,6 +92,8 @@ function factory(root: string, opts: { fail?: string } = {}): Factory {
     phase2: [],
     phase1: [],
     openGate: null,
+    afterWrite: () => Promise.resolve(),
+    beforeWriteResult: () => undefined,
     open: async () => {
       throw new Error('unset');
     },
@@ -126,6 +136,29 @@ function factory(root: string, opts: { fail?: string } = {}): Factory {
               return;
             }
             if (mode === 'throw') throw new Error('stream exploded');
+            if (mode === 'create') {
+              fs.mkdirSync(path.join(root, 'notes'), { recursive: true });
+              fs.writeFileSync(path.join(root, 'notes', 'new.md'), '# new\n');
+              yield call('2', 'Create', { file_path: 'notes/new.md', content: '# new' });
+              yield toolResult('2', 'Create');
+              await f.afterWrite();
+              yield result('success');
+              return;
+            }
+            if (mode === 'early' || mode === 'early-changed') {
+              moveEvent(root);
+              yield call('2', 'Edit', { file_path: 'calendar.json', old_str: 'a', new_str: 'b' });
+              f.beforeWriteResult();
+              yield toolResult('2', 'Edit');
+              await f.afterWrite();
+              if (mode === 'early-changed') {
+                const cal = path.join(root, 'calendar.json');
+                fs.writeFileSync(cal, fs.readFileSync(cal, 'utf8').replace('2026-11-02T09:00:00-08:00', '2026-11-02T08:30:00-08:00'));
+              }
+              yield text('Moved it.');
+              yield result('success');
+              return;
+            }
             moveEvent(root);
             yield call('2', 'Edit', { file_path: 'calendar.json', old_str: 'a', new_str: 'b' });
             yield text('Moved the Priya review to Monday 9am.');
@@ -557,5 +590,83 @@ test('a phase2 stream blocked past phaseTimeoutMs is interrupted, rejects, and c
   f.phase2.push('block');
   await assert.rejects(keepAlive(exec.phase2('t1', belief())), SpeculationFailed);
   assert.deepEqual(f.sessions[0]!.calls, ['interrupt', 'close']);
+  assertValid(events);
+});
+
+// The fake waits (up to 2 s) for a diff event after the write's ToolResult, then records a marker
+// metric, then yields the Result. An early diff therefore sits before the marker; a turn-end diff after it.
+const MARKER = 'MARKER';
+function withMarker(f: Factory, events: ServerEvent[]): void {
+  f.afterWrite = async () => {
+    const until = Date.now() + 2000;
+    while (Date.now() < until && droid(events, 'diff').length === 0) await new Promise((r) => setTimeout(r, 5));
+    events.push({ type: 'metric', source: 'droid', label: MARKER, ms: 0 });
+  };
+}
+const markerAt = (events: ServerEvent[]): number => events.findIndex((e) => e.type === 'metric' && e.label === MARKER);
+
+test('early diff: emitted when the Edit result returns, before the Result; no duplicate at turn end', { timeout: 5000 }, async () => {
+  const { f, events, exec } = setup();
+  withMarker(f, events);
+  await exec.phase1('t1', belief());
+  f.phase2.push('early');
+  await exec.phase2('t1', belief());
+  const diffs = droid(events, 'diff');
+  assert.equal(diffs.length, 1);
+  assert.equal((diffs[0]!.payload as { file: string }).file, 'calendar.json');
+  assert.match((diffs[0]!.payload as { diff: string }).diff, /2026-11-02T09:00:00-08:00/);
+  assert.ok(events.indexOf(diffs[0]!) < markerAt(events), 'diff before marker');
+  const result = droid(events, 'result')[0]!;
+  assert.ok(markerAt(events) < events.indexOf(result));
+  assert.deepEqual(metrics(events), ['createSession', 'phase1', 'first-diff', MARKER, 'phase2', 'diff']);
+  assertValid(events);
+});
+
+test('early diff: a final diff that differs is re-emitted exactly once', { timeout: 5000 }, async () => {
+  const { f, events, exec } = setup();
+  withMarker(f, events);
+  await exec.phase1('t1', belief());
+  f.phase2.push('early-changed');
+  await exec.phase2('t1', belief());
+  const diffs = droid(events, 'diff');
+  assert.equal(diffs.length, 2);
+  assert.ok(events.indexOf(diffs[0]!) < markerAt(events));
+  assert.ok(markerAt(events) < events.indexOf(diffs[1]!));
+  assert.match((diffs[0]!.payload as { diff: string }).diff, /\+.*2026-11-02T09:00:00-08:00/);
+  assert.match((diffs[1]!.payload as { diff: string }).diff, /\+.*2026-11-02T08:30:00-08:00/);
+  assert.ok(events.indexOf(diffs[1]!) < events.indexOf(droid(events, 'result')[0]!));
+  assertValid(events);
+});
+
+test('early diff: a Create of a new file shows up before the Result', { timeout: 5000 }, async () => {
+  const { f, events, exec } = setup();
+  withMarker(f, events);
+  await exec.phase1('t1', belief('add_note'));
+  f.phase2.push('create');
+  await exec.phase2('t1', belief('add_note'));
+  const diffs = droid(events, 'diff');
+  assert.equal(diffs.length, 1);
+  assert.equal((diffs[0]!.payload as { file: string }).file, 'notes/new.md');
+  assert.match((diffs[0]!.payload as { diff: string }).diff, /new file mode[\s\S]*\+# new/);
+  assert.ok(events.indexOf(diffs[0]!) < markerAt(events));
+  assertValid(events);
+});
+
+test('early diff: a write result that arrives after rollback emits nothing', { timeout: 5000 }, async () => {
+  const { root, git, f, events, exec } = setup();
+  await exec.phase1('t1', belief());
+  let rolled: Promise<void> = Promise.resolve();
+  // The rollback bumps the generation synchronously; its git work waits for phase2 on the chain.
+  f.beforeWriteResult = () => {
+    rolled = exec.rollback('t1');
+  };
+  f.phase2.push('early');
+  await exec.phase2('t1', belief());
+  await rolled;
+  assert.equal(droid(events, 'diff').length, 0);
+  assert.equal(droid(events, 'result').length, 0);
+  assert.ok(!metrics(events).includes('first-diff'));
+  assert.equal(calendar(root), seedCalendar);
+  assert.equal(await git.currentBranch(), 'main');
   assertValid(events);
 });

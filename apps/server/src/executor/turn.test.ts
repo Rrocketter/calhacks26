@@ -309,3 +309,43 @@ test('a rejecting iterator return() after a normal Result still yields success',
   assert.equal(r.outcome, 'success');
   assert.equal(r.summary, 'done');
 });
+
+test('onWrite fires for each successful Create, Edit and ApplyPatch result only', async () => {
+  const s = fake([
+    call('1', 'Read', { file_path: 'notes/a.md' }),
+    toolResult('1', 'Read'),
+    call('2', 'Edit', { file_path: 'notes/a.md', old_str: 'a', new_str: 'b' }),
+    toolResult('2', 'Edit'),
+    call('3', 'Create', { file_path: 'notes/b.md', content: 'x' }),
+    toolResult('3', 'Create', true),
+    call('4', 'Create', { file_path: 'notes/c.md', content: 'x' }),
+    toolResult('4', ''), // name resolved from the call
+    call('5', 'ApplyPatch', { input: '*** Begin Patch\n*** Add File: notes/d.md\n+x\n*** End Patch' }),
+    toolResult('5', 'ApplyPatch'),
+    call('6', 'TodoWrite', { todos: '1. [completed] done' }),
+    toolResult('6', 'TodoWrite'),
+    result('success'),
+  ]);
+  let writes = 0;
+  const r = await runTurn(s, 'go', { turnId: 't', guard, emit: () => undefined, onWrite: () => void writes++ });
+  assert.equal(r.outcome, 'success');
+  assert.equal(writes, 3);
+});
+
+test('onWrite does not block the stream, and its errors are swallowed', { timeout: 2000 }, async () => {
+  const events = [call('1', 'Edit', { file_path: 'notes/a.md', old_str: 'a', new_str: 'b' }), toolResult('1', 'Edit'), result('success')];
+  const hung = await runTurn(fake(events), 'go', { turnId: 't', guard, emit: () => undefined, onWrite: () => new Promise<void>(() => undefined) });
+  assert.equal(hung.outcome, 'success');
+  const sync = await runTurn(fake(events), 'go', {
+    turnId: 't',
+    guard,
+    emit: () => undefined,
+    onWrite: () => {
+      throw new TypeError('sync');
+    },
+  });
+  assert.equal(sync.outcome, 'success');
+  const rejected = await runTurn(fake(events), 'go', { turnId: 't', guard, emit: () => undefined, onWrite: () => Promise.reject(new RangeError('async')) });
+  assert.equal(rejected.outcome, 'success');
+  await new Promise((r) => setTimeout(r, 10)); // let the rejection handlers run
+});

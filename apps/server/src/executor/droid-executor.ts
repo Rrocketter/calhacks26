@@ -213,6 +213,30 @@ export class DroidExecutor implements Executor {
       if (this.live?.turnId !== turnId || this.live.post1 === null) return this.fail('phase2 without phase1');
       const t0 = performance.now();
       const now = this.opts.now?.() ?? new Date();
+      // Early diff (R24): each successful write result emits the files whose diff changed. Jobs run
+      // one at a time so two quick writes don't race git; one that starts after supersession does nothing.
+      const emitted = new Map<string, string>();
+      const emitDiffs = (diffs: { file: string; diff: string }[]): void => {
+        for (const d of diffs) {
+          if (emitted.get(d.file) === d.diff) continue;
+          emitted.set(d.file, d.diff);
+          this.opts.emit({ type: 'droid_event', turnId, kind: 'diff', payload: { file: d.file, diff: d.diff }, ts: Date.now() });
+        }
+      };
+      let writes: Promise<void> = Promise.resolve();
+      const onWrite = (): Promise<void> => {
+        writes = writes
+          .then(async () => {
+            if (superseded() || this.closed) return;
+            const diffs = await this.git.diffWorkingTree();
+            if (superseded()) return;
+            const first = emitted.size === 0;
+            emitDiffs(diffs);
+            if (first && emitted.size > 0) this.metric('first-diff', performance.now() - t0);
+          })
+          .catch((e: unknown) => console.log(`[droid] early diff failed (${e instanceof Error ? e.name : 'unknown'})`));
+        return writes;
+      };
       this.running = { turnId, phase: 'phase2' };
       const r = await this.timed(s, 'phase2', () =>
         runTurn(s, phase2Prompt(belief, now), {
@@ -220,10 +244,13 @@ export class DroidExecutor implements Executor {
           guard: this.guard,
           emit: this.opts.emit,
           graceMs: this.opts.graceMs,
+          onWrite,
         }),
       ).finally(() => {
         this.running = null;
       });
+      // No early-diff git work may overlap commitAll, a reset or a rollback.
+      await writes;
       if (superseded()) return;
       if (r.outcome !== 'success') return this.fail(`phase2 ${r.outcome}`);
       let diffs: { file: string; diff: string }[];
@@ -236,9 +263,7 @@ export class DroidExecutor implements Executor {
       } catch (e) {
         return this.fail('git commit/diff failed', e);
       }
-      for (const d of diffs) {
-        this.opts.emit({ type: 'droid_event', turnId, kind: 'diff', payload: { file: d.file, diff: d.diff }, ts: Date.now() });
-      }
+      emitDiffs(diffs);
       this.opts.emit({
         type: 'droid_event',
         turnId,
