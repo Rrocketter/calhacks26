@@ -28,6 +28,13 @@ function pct(sorted: number[], p: number): number {
 
 const fmt = (ms: number) => `+${Math.round(ms)}ms`.padEnd(8);
 
+/** What demo-utterance-1 must lock and say for a PASS. */
+export const EXPECTED = {
+  intent: 'draft_message',
+  person: 'Priya Shah',
+  interject: "Heads up, Priya's meeting is Friday, not Thursday. Say Friday?",
+} as const;
+
 /**
  * Observes the tracker: pass `tap.emit` as the tracker's `emit` (forward to your own sink via
  * `next`) and `tap.wrap(retriever)` as its retriever. The wrapper sees which partial the tracker
@@ -43,6 +50,8 @@ export class ReplayTap {
   tracker?: BeliefTracker;
   print: Line = () => {};
   mossMs: number[] = [];
+  /** belief.latencyMs.moss of each Moss-driven belief_update (one per changed partial). */
+  mossStepMs: number[] = [];
   lock?: { atMs: number; idx: number; belief: Belief };
   interject?: { atMs: number; idx: number; text: string };
   private pendingMoss: { ms: number }[] = [];
@@ -71,6 +80,11 @@ export class ReplayTap {
 
   emit = (ev: ServerEvent): void => {
     this.next(ev);
+    if (ev.type === 'error') {
+      // Haiku and tracker error events carry no turnId
+      this.print(`${fmt(this.now())} ERROR ${ev.source ?? '?'} ${ev.message}`);
+      return;
+    }
     if (!this.turnId || !('turnId' in ev) || ev.turnId !== this.turnId) return;
     const t = this.now();
     if (ev.type === 'moss_hits') {
@@ -88,8 +102,10 @@ export class ReplayTap {
     if (this.pendingMoss.length) {
       const max = Math.max(...this.pendingMoss.map((m) => m.ms));
       const top = b.topHits.slice(0, 3).map((h) => h.docId).join(', ') || 'none';
+      this.mossStepMs.push(b.latencyMs.moss);
       this.print(
-        `${fmt(t)} moss     ${this.pendingMoss.length} queries max ${max.toFixed(1)}ms top: ${top}`,
+        `${fmt(t)} moss     ${this.pendingMoss.length} queries max ${max.toFixed(1)}ms ` +
+          `step ${b.latencyMs.moss.toFixed(1)}ms top: ${top}`,
       );
       this.pendingMoss = [];
     }
@@ -179,13 +195,28 @@ export function printVerdict(tap: ReplayTap, said: string, print: Line): boolean
   print(
     `moss: ${ms.length} queries p50 ${pct(ms, 50).toFixed(1)}ms p95 ${pct(ms, 95).toFixed(1)}ms`,
   );
-  const pass =
-    saidIdx >= 0 &&
-    tap.lock !== undefined &&
-    tap.lock.idx >= 0 &&
-    tap.lock.idx < saidIdx &&
-    tap.interject !== undefined &&
-    tap.interject.idx === saidIdx;
+  const steps = [...tap.mossStepMs].sort((a, b) => a - b);
+  print(
+    `moss step: ${steps.length} updates p50 ${pct(steps, 50).toFixed(1)}ms p95 ${pct(steps, 95).toFixed(1)}ms`,
+  );
+
+  const lockB = tap.lock?.belief;
+  print(`locked:    ${lockB ? `${lockB.intent} person=${lockB.entities.person ?? '-'}` : 'none'}`);
+  print(`said:      ${tap.interject ? JSON.stringify(tap.interject.text) : 'none'}`);
+  const saidAt = saidIdx >= 0 ? tap.partials[saidIdx]!.atMs : NaN;
+  const nextAt = saidIdx >= 0 ? (tap.partials[saidIdx + 1]?.atMs ?? Infinity) : NaN;
+  const checks: [string, boolean][] = [
+    [`${said.toLowerCase()} partial found`, saidIdx >= 0],
+    ['lock attributed to an earlier partial', !!tap.lock && tap.lock.idx >= 0 && tap.lock.idx < saidIdx],
+    [`lock before the ${said.toLowerCase()} partial arrived`, !!tap.lock && tap.lock.atMs < saidAt],
+    [`locked ${EXPECTED.intent}`, lockB?.intent === EXPECTED.intent],
+    [`locked person ${EXPECTED.person}`, lockB?.entities.person === EXPECTED.person],
+    [`interject on the ${said.toLowerCase()} partial`, !!tap.interject && tap.interject.idx === saidIdx],
+    ['interject before the next partial arrived', !!tap.interject && tap.interject.atMs < nextAt],
+    ['interject text matches', tap.interject?.text === EXPECTED.interject],
+  ];
+  for (const [name, ok] of checks) print(`  ${ok ? 'ok  ' : 'FAIL'} ${name}`);
+  const pass = checks.every(([, ok]) => ok);
   print(pass ? 'PASS' : 'FAIL');
   return pass;
 }
