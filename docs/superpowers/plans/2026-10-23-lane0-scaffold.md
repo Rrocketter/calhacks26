@@ -51,7 +51,7 @@
 - [ ] **Step 1:** Root `package.json`: `private`, `"type":"module"`, `packageManager: pnpm@10.34.8`, `engines.node >=20.6`. `pnpm-workspace.yaml` lists `apps/*`, `packages/*`, and `onlyBuiltDependencies: [esbuild]`.
 - [ ] **Step 2:** `pnpm add -Dw -E typescript eslint @eslint/js typescript-eslint`. Flat config: recommended + typescript-eslint recommended, ignore `dist`, `var`, `node_modules`.
 - [ ] **Step 3:** `scripts/check-secrets.mjs`: list files with `git ls-files -co --exclude-standard`, scan each text file for (a) patterns `sk_car_[A-Za-z0-9]{10,}`, `sk-ant-[A-Za-z0-9_-]{10,}`, `fk-[A-Za-z0-9_-]{20,}`, and (b) every non-empty value (length ≥ 8) from `.env` if present. Print `file:line [pattern-name]` only, never the match. Exit 1 on any hit.
-- [ ] **Step 4: Verify.** `pnpm check:secrets` → exit 0. Then `echo 'x=sk_car_abcdefghijklmnop' > leak.txt && pnpm check:secrets` → exit 1, prints `leak.txt:1 [cartesia]` with no key text. `rm leak.txt`.
+- [ ] **Step 4: Verify.** `pnpm check:secrets` → exit 0. Then `printf 'x=sk_car_%s\n' abcdefghijklmnop > leak.txt && pnpm check:secrets` → exit 1, prints `leak.txt:1 [cartesia]` with no key text. `rm leak.txt`.
 - [ ] **Step 5: Commit** `chore: pnpm workspace, tsconfig, eslint, check:secrets`
 
 ### Task 2: Contracts types + event schema
