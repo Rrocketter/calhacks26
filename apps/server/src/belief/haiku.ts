@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { ACTIONS, ClaimSchema, IntentSchema, type MossHit } from '@ahead/contracts';
+import { requireEnv } from '../env.js';
 import { logLatency } from '../log.js';
 import type { IntentLlm, IntentResult } from './types.js';
 
@@ -81,7 +82,7 @@ export class HaikuIntentLlm implements IntentLlm {
   private readonly client: Anthropic;
 
   constructor(client?: Anthropic) {
-    this.client = client ?? new Anthropic();
+    this.client = client ?? new Anthropic({ apiKey: requireEnv('ANTHROPIC_API_KEY') });
   }
 
   async classify(input: {

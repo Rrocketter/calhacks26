@@ -33,6 +33,7 @@ type TurnState = {
   belief?: Belief;
   locked: boolean;
   finalized: boolean;
+  chain: Promise<void>;
 };
 
 function clamp01(x: number): number {
@@ -76,7 +77,22 @@ export class BeliefTracker {
     }
   }
 
-  async onUpdate(turnId: string, text: string): Promise<void> {
+  /**
+   * Queue an update for the turn. Updates for one turn run strictly in order, so callers
+   * need not await. The returned promise settles when this update is done and never rejects.
+   */
+  onUpdate(turnId: string, text: string): Promise<void> {
+    const st = this.getOrCreate(turnId);
+    const step = st.chain.then(() => this.doUpdate(turnId, st, text));
+    st.chain = step.catch((err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      console.log(`[moss] error ${message}`);
+      this.deps.emit({ type: 'error', source: 'moss', message });
+    });
+    return st.chain;
+  }
+
+  private getOrCreate(turnId: string): TurnState {
     let st = this.turns.get(turnId);
     if (!st) {
       st = {
@@ -95,9 +111,14 @@ export class BeliefTracker {
         lastAppliedSeq: 0,
         locked: false,
         finalized: false,
+        chain: Promise.resolve(),
       };
       this.turns.set(turnId, st);
     }
+    return st;
+  }
+
+  private async doUpdate(turnId: string, st: TurnState, text: string): Promise<void> {
     const norm = normalize(text);
     if (norm === st.normText) return;
     st.rawText = text;

@@ -288,3 +288,62 @@ test('confidence is clamped to [0,1]', async () => {
   assert.equal(tracker.current('t1')!.confidence, 1);
   for (const ev of events) assert.ok(parseServerEvent(JSON.stringify(ev)));
 });
+
+test('overlapping updates for one turn are serialized', async () => {
+  // Retriever whose answers for the first partial arrive after the second partial's.
+  const gates = new Map<string, Deferred<void>>();
+  const table: Record<string, RetrievedHit[]> = {
+    'draft a message': [hit('doc-x', { type: 'note', people: '' })],
+    'draft a message to priya': [hit('doc-y', { type: 'contact', people: 'Priya Shah' })],
+  };
+  const retriever: Retriever = {
+    async query(text: string) {
+      const g = deferred<void>();
+      gates.set(text, g);
+      await g.promise;
+      return { hits: table[text] ?? [], latencyMs: 1 };
+    },
+  };
+  const { tracker, events } = setup({ retriever });
+  const a = tracker.onUpdate('t1', 'draft a message');
+  const b = tracker.onUpdate('t1', 'draft a message to priya');
+  await tick();
+  // Release whatever is pending, newest first, until both updates are done.
+  let done = false;
+  void Promise.all([a, b]).then(() => (done = true));
+  while (!done) {
+    for (const k of [...gates.keys()].reverse()) {
+      gates.get(k)!.resolve();
+      gates.delete(k);
+    }
+    await tick();
+  }
+  const updates = ofType(events, 'belief_update');
+  assert.equal(updates.length, 2);
+  const last = updates.at(-1)!.belief;
+  assert.equal(last.entities.person, 'Priya Shah');
+  // decay applied once per update: doc-x 1*0.6 = 0.6 < doc-y 1
+  assert.deepEqual(
+    last.topHits.map((h) => h.docId),
+    ['doc-y', 'doc-x'],
+  );
+  assert.equal(updates[0]!.belief.entities.person, undefined);
+});
+
+test('a failed update does not break later updates on the chain', async () => {
+  const retriever: Retriever = {
+    async query(text: string) {
+      if (text === 'draft') throw new Error('moss down');
+      return { hits: [], latencyMs: 1 };
+    },
+  };
+  const { tracker, events } = setup({ retriever });
+  const a = tracker.onUpdate('t1', 'draft');
+  await assert.doesNotReject(a);
+  await tracker.onUpdate('t1', 'draft a');
+  const errors = ofType(events, 'error');
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0]!.source, 'moss');
+  assert.match(errors[0]!.message, /moss down/);
+  assert.equal(ofType(events, 'belief_update').length, 1);
+});
