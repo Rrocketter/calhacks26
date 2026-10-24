@@ -331,3 +331,12 @@ canary leaked to model: no
 Experiments: `SPIKE_READ_POLICY=list` gave the same canary result as `home` (all 4 sandbox-denied, read-inside ok). `home-noallow` denied all 4 canary reads but broke the in-workspace Edit (`edit: fail`), which shows allowRead is what keeps the workspace readable.
 
 **Latency (Task 12 runs):** `createSession` 441 to 1051 ms. updateSettings plus listTools under 15 ms. Interrupt to turn end 8 to 23 ms. `close()` 1.4 to 2.3 s. A canary-read session took about 4 to 7 s, mostly model time before the Read call.
+
+## Lane A browser audio
+
+- The Vite dev server proxies `/ws` to `ws://localhost:8787` (`ws: true`); the page connects to `ws://<location.host>/ws`. Verified headless: smoke-voice with `PORT=5173` gets partials and Sonic chunks through the proxy.
+- Capture runs an `AudioContext({sampleRate:16000})` with an AudioWorklet and sends 100 ms s16le chunks. Playback uses the default context rate and schedules `AudioBuffer`s gaplessly per Sonic `contextId`.
+
+### Lane A live measurements
+
+To fill in after the spoken test: partial cadence, client TTFA (turn_end to first scheduled buffer), server `ttfa` metric, mic resume delay.
