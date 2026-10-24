@@ -608,7 +608,9 @@ test('after a correction yes the HUD receives the corrected belief, and later be
 
 const confirms = (s: S) => s.calls.filter((c) => c.name === 'spec.onConfirm').map((c) => c.args);
 const windowMetrics = (s: S) =>
-  s.ws.flatMap((e) => (e.type === 'metric' && e.label === 'confirm_window' ? [e.ms] : []));
+  s.ws.flatMap((e) => (e.type === 'metric' && e.label.startsWith('confirm_window') ? [e.ms] : []));
+const windowLabels = (s: S) =>
+  s.ws.flatMap((e) => (e.type === 'metric' && e.label.startsWith('confirm_window') ? [e.label] : []));
 
 test('"Yeah, do it" as the first partial after STAGED confirms at once, before any turn end', async () => {
   const s = setup({ finalBelief: () => belief('draft_message', { person: 'Priya Shah' }), autoState: true });
@@ -683,16 +685,65 @@ test('the HUD gets a confirm_window metric: 6 s for Apply?, 4 s for a correction
   c.orch.close();
 });
 
-test('an unanswered Apply? closes after confirmWindowMs; a later "yes" is a normal turn', async () => {
+test('an unanswered Apply? closes after confirmWindowMs; a later "yes" is a no-op and rolls nothing back', async () => {
   const s = setup({ finalBelief: () => belief('draft_message', { person: 'Priya Shah' }), confirmWindowMs: 20 });
   await stagedTurn(s);
   await new Promise((r) => setTimeout(r, 60));
   assert.deepEqual(windowMetrics(s), [20, 0]);
   const before = s.specEvents.length;
+  const spokenBefore = s.texts().length;
+  utter(s, 't2', 'Yes.');
+  await settle();
+  assert.deepEqual(confirms(s), []);
+  assert.equal(s.specEvents.length, before, 'no turn_start, so the staged draft survives');
+  assert.equal(s.texts().length, spokenBefore, 'no fallback reply');
+});
+
+test('a bare "No." with nothing pending is a no-op', async () => {
+  const s = setup();
+  utter(s, 't1', 'No.');
+  await settle();
+  assert.deepEqual(s.specEvents, []);
+  assert.deepEqual(s.texts(), []);
+});
+
+test('"Yes, draft a message to Marcus" with nothing pending starts the turn once it is more than a yes', () => {
+  const s = setup();
+  s.orch.onVoiceEvent(start('t1'));
+  s.orch.onVoiceEvent(partial('t1', 'Yes'));
+  assert.deepEqual(s.specTypes(), []);
+  s.orch.onVoiceEvent(partial('t1', 'Yes, draft a message to Marcus'));
+  assert.deepEqual(s.specTypes(), ['turn_start:t1']);
+});
+
+test('first answer wins: a click Discard right after a spoken correction yes is ignored', async () => {
+  const s = setup(correctionOpts);
+  await interjectedTurn(s);
   s.orch.onVoiceEvent(start('t2'));
   s.orch.onVoiceEvent(partial('t2', 'Yes'));
+  s.orch.onClient({ type: 'confirm_action', turnId: 't1', apply: false });
   assert.deepEqual(confirms(s), []);
-  assert.deepEqual(s.specTypes().slice(before), ['turn_start:t2']);
+  assert.deepEqual(s.texts(), ['Friday.']);
+});
+
+test('first answer wins: a spoken yes after a click Apply is a no-op', async () => {
+  const s = setup({ finalBelief: () => belief('draft_message', { person: 'Priya Shah' }), autoState: true });
+  await stagedTurn(s);
+  s.orch.onClient({ type: 'confirm_action', turnId: 't1', apply: true });
+  const before = s.specEvents.length;
+  utter(s, 't2', 'Yes.');
+  await settle();
+  assert.deepEqual(confirms(s), [['t1', true]]);
+  assert.equal(s.specEvents.length, before);
+});
+
+test('the window label names the pending kind and turn', async () => {
+  const s = setup({ finalBelief: () => belief('draft_message', { person: 'Priya Shah' }) });
+  await stagedTurn(s);
+  assert.deepEqual(windowLabels(s), ['confirm_window:apply:t1']);
+  s.orch.onClient({ type: 'confirm_action', turnId: 't1', apply: true });
+  assert.deepEqual(windowLabels(s), ['confirm_window:apply:t1', 'confirm_window']);
+  s.orch.close();
 });
 
 test('default windows: correction 4000 ms, Apply? 6000 ms', () => {

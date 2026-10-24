@@ -49,8 +49,14 @@ export type OrchestratorDeps = {
 export const CORRECTION_TIMEOUT_MS = 4000;
 /** How long "Apply?" listens for a spoken yes/no. */
 export const CONFIRM_WINDOW_MS = 6000;
-/** metric label the HUD reads as "Listening for yes / no": ms > 0 opens the window, 0 closes it. */
+/**
+ * metric label the HUD reads as "Listening for yes / no". Opening sends
+ * `confirm_window:<correction|apply>:<turnId>` with ms > 0 (the HUD's confirm_action target);
+ * closing sends `confirm_window` with ms 0.
+ */
 export const CONFIRM_WINDOW_LABEL = 'confirm_window';
+/** A client confirm this soon after a spoken answer settled the same correction lost the race. */
+export const FIRST_WINS_MS = 2000;
 const DEFAULT_FIXTURE = 'demo-utterance-1';
 
 type Awaiting = { kind: 'correction'; turnId: string; claim: Claim } | { kind: 'apply'; turnId: string } | null;
@@ -98,6 +104,8 @@ export class Orchestrator {
 
   private deferred: Deferred | null = null;
   private readonly corrected = new Map<string, Claim>();
+  /** When each turn's correction was settled (by voice, click, key or timeout). */
+  private readonly correctionSettled = new Map<string, number>();
   private windowTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(deps: OrchestratorDeps) {
@@ -215,11 +223,19 @@ export class Orchestrator {
       case 'audio_chunk':
         if (!this.d.demo) this.d.voice.handleClient(ev);
         return;
-      case 'confirm_action':
+      case 'confirm_action': {
+        // Voice, click and key are equivalent and the first one wins.
+        const settledAt = this.correctionSettled.get(ev.turnId);
+        const pending = this.deferred?.turnId === ev.turnId || this.awaiting?.turnId === ev.turnId;
+        if (!pending && settledAt !== undefined && Date.now() - settledAt < FIRST_WINS_MS) {
+          console.log(`[orchestrator] confirm_action ${ev.turnId} ignored: already answered`);
+          return;
+        }
         if (this.deferred?.turnId === ev.turnId) this.resolveCorrection(ev.apply, false);
         else this.d.speculator.onConfirm(ev.turnId, ev.apply);
         this.release();
         return;
+      }
       case 'demo_control': {
         const demo = this.d.demo;
         if (!demo) return this.error('demo', 'demo_control needs DEMO_MODE=1');
@@ -279,6 +295,8 @@ export class Orchestrator {
     }
     const start = this.pendingStart;
     if (!start || start.turnId !== turnId) return;
+    // A bare yes/no with nothing pending never starts a turn (it would roll back a staged draft).
+    if (parseConfirm(text) !== null) return;
     this.pendingStart = null;
     this.toSpec(start);
   }
@@ -346,7 +364,7 @@ export class Orchestrator {
       const ms = a.kind === 'correction' ? this.correctionTimeoutMs : this.confirmWindowMs;
       this.windowTimer = setTimeout(() => this.onWindowTimeout(a), ms);
       this.windowTimer.unref?.();
-      this.d.send({ type: 'metric', source: 'ink', label: CONFIRM_WINDOW_LABEL, ms });
+      this.d.send({ type: 'metric', source: 'ink', label: `${CONFIRM_WINDOW_LABEL}:${a.kind}:${a.turnId}`, ms });
     } else if (wasOpen) {
       this.d.send({ type: 'metric', source: 'ink', label: CONFIRM_WINDOW_LABEL, ms: 0 });
     }
@@ -375,8 +393,10 @@ export class Orchestrator {
 
   private turnEnd(turnId: string, finalText: string): void {
     const tracker = this.d.tracker;
-    if (turnId === this.confirmTurn) {
-      // Already acted on at its first partial.
+    const bare = !this.started.has(turnId) && parseConfirm(finalText) !== null;
+    if (turnId === this.confirmTurn || bare) {
+      // Already acted on at its first partial, or a yes/no with nothing pending: a no-op.
+      if (bare) console.log(`[orchestrator] bare "${finalText}" with nothing pending ignored (${turnId})`);
       if (tracker) this.guard(tracker.onTurnEnd(turnId, finalText), 'tracker turn end');
       return;
     }
@@ -438,6 +458,7 @@ export class Orchestrator {
     const d = this.deferred;
     if (!d) return;
     this.deferred = null;
+    this.correctionSettled.set(d.turnId, Date.now());
     if (this.awaiting?.kind === 'correction' && this.awaiting.turnId === d.turnId) this.setAwaiting(null);
     if (apply) this.corrected.set(d.turnId, d.claim);
     console.log(`[orchestrator] correction ${d.turnId} ${apply ? 'applied' : 'kept'} (${d.events.length} deferred)`);
