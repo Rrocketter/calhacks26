@@ -17,6 +17,7 @@
     "spike:droid": "node --env-file=../../.env --import tsx scripts/spike-droid.ts",
     "smoke:sonic-ws": "node --env-file=../../.env --import tsx scripts/smoke-sonic-ws.ts",
     "smoke:voice": "node --import tsx scripts/smoke-voice.ts",
+    "demo:run": "node --import tsx scripts/demo-run.ts",
     "smoke:executor": "node --env-file=../../.env --import tsx scripts/smoke-executor.ts"
   },
   "dependencies": {

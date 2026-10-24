@@ -2,6 +2,7 @@
 // reports turn events, partial cadence and time-to-first-audio. Start the server first
 // (`pnpm --filter @ahead/server dev`). `--twice` sends the WAV a second time on the same socket;
 // `--mock` (server on AHEAD_MOCK_BELIEF=1) skips the reply-done exit check.
+// For a speculative utterance the reply is the STAGED line, so "client ttfa" is turn_end -> STAGED speech.
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,7 +11,7 @@ import WebSocket from 'ws';
 
 const FRAME_BYTES = 3200; // 100 ms at 16 kHz s16le mono
 const FRAME_MS = 100;
-const TURN_TIMEOUT_MS = 20000;
+const TURN_TIMEOUT_MS = 60000;
 const PORT = Number(process.env.AHEAD_SERVER_PORT ?? 8787);
 const TWICE = process.argv.includes('--twice');
 const MOCK = process.argv.includes('--mock'); // pass when the server runs with AHEAD_MOCK_BELIEF=1
