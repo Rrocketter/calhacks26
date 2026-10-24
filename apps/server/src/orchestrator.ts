@@ -68,6 +68,8 @@ export class Orchestrator {
   private readonly lastBelief = new Map<string, Belief>();
   private readonly specState = new Map<string, State>();
   private lastSpecTurn: string | null = null;
+  /** The turn whose turn_start the speculator last received. Older turns were rolled back by it. */
+  private specTurn: string | null = null;
   /** Turns whose turn-end reply has run: a later STAGED speaks immediately. */
   private readonly ended = new Set<string>();
   private readonly stagedSpoken = new Set<string>();
@@ -116,11 +118,19 @@ export class Orchestrator {
         if (tracker) this.safely(() => tracker.onResume(ev.turnId), 'tracker resume');
         this.toSpec(ev);
         return;
-      case 'turn_end':
+      case 'turn_end': {
         if (this.openTurn === ev.turnId) this.openTurn = null;
         this.d.send(ev);
         this.toSpec(ev);
+        // An empty final never reaches onVoiceTurnEnd (called synchronously right after this event),
+        // so an interjected turn with no awaited answer keeps what was said.
+        const turnId = ev.turnId;
+        queueMicrotask(() => {
+          const waiting = this.awaiting?.kind === 'correction' && this.awaiting.turnId === turnId;
+          if (this.deferred?.turnId === turnId && !waiting) this.resolveCorrection(false, false);
+        });
         return;
+      }
       case 'belief_update':
       case 'moss_hits':
         // Only in mock-belief mode: the mock stream goes through VoiceSession's `send`.
@@ -158,7 +168,7 @@ export class Orchestrator {
     if (ev.type !== 'state_change' || ev.turnId === '') return;
     this.specState.set(ev.turnId, ev.state);
     this.lastSpecTurn = ev.turnId;
-    if (ev.state === 'STAGED' && this.ended.has(ev.turnId)) this.speakStaged(ev.turnId);
+    if (ev.state === 'STAGED' && this.ended.has(ev.turnId) && this.isSpecTurn(ev.turnId)) this.speakStaged(ev.turnId);
     if (ev.state === 'COMMITTED' || ev.state === 'ROLLED_BACK') {
       if (this.awaiting?.kind === 'apply' && this.awaiting.turnId === ev.turnId) this.release();
       if (this.spokenConfirm === ev.turnId) {
@@ -222,6 +232,7 @@ export class Orchestrator {
       this.lastBelief.set(ev.turnId, belief);
       ev = { ...ev, belief };
     }
+    if (ev.type === 'turn_start') this.specTurn = ev.turnId;
     this.d.speculator.onServerEvent(ev);
   }
 
@@ -304,6 +315,7 @@ export class Orchestrator {
       return;
     }
     if (belief && SPECULATIVE.includes(belief.intent)) {
+      if (!this.isSpecTurn(turnId)) return; // superseded: the speculator rolled it back, the user moved on
       const state = this.specState.get(turnId);
       if (state === 'SPECULATING') return; // STAGED speaks when it lands
       if (state === 'STAGED') return this.speakStaged(turnId);
@@ -311,8 +323,12 @@ export class Orchestrator {
     this.say(FALLBACK_REPLY, turnId);
   }
 
+  private isSpecTurn(turnId: string): boolean {
+    return this.specTurn === turnId;
+  }
+
   private speakStaged(turnId: string): void {
-    if (this.stagedSpoken.has(turnId)) return;
+    if (this.stagedSpoken.has(turnId) || !this.isSpecTurn(turnId)) return;
     this.stagedSpoken.add(turnId);
     const belief = this.lastBelief.get(turnId);
     this.say(belief ? stagedLine(belief) : "It's ready. Apply?", turnId);

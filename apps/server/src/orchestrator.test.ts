@@ -16,6 +16,8 @@ type Opts = {
   correctionTimeoutMs?: number;
   /** Speculator fake answers onConfirm with COMMITTED / ROLLED_BACK synchronously. */
   autoState?: boolean;
+  /** tracker.onTurnEnd waits for this before resolving (a slow final Haiku call). */
+  gate?: Promise<void>;
 };
 
 const belief = (intent: Belief['intent'], entities: Record<string, string> = {}, claims: Claim[] = []): Belief => ({
@@ -42,6 +44,7 @@ function setup(opts: Opts = {}) {
     onResume: (t) => void rec('tracker.onResume', [t]),
     onTurnEnd: async (t, text) => {
       rec('tracker.onTurnEnd', [t, text]);
+      if (opts.gate) await opts.gate;
       const b = opts.finalBelief ? opts.finalBelief(t) : belief('unknown');
       if (opts.emitFinal) orch.onTrackerEvent({ type: 'belief_update', turnId: t, belief: b });
       return b;
@@ -444,4 +447,66 @@ test('non-confirm utterance after an interject flushes the correction unchanged,
     'turn_start:t2',
   ]);
   assert.equal(s.spoken.length, 0);
+});
+
+// ---- superseded turns ----
+
+test('a turn superseded while its final belief is in flight does not ask "Apply?" (STAGED before turn end)', async () => {
+  let open!: () => void;
+  const gate = new Promise<void>((r) => (open = r));
+  const s = setup({ finalBelief: () => belief('draft_message', { person: 'Priya Shah' }), gate });
+  s.orch.onVoiceEvent(start('A'));
+  s.orch.onSpeculatorEvent(sc('A', 'LISTENING'));
+  s.orch.onTrackerEvent(bu('A', belief('draft_message', { person: 'Priya Shah' })));
+  s.orch.onSpeculatorEvent(sc('A', 'SPECULATING'));
+  s.orch.onSpeculatorEvent(sc('A', 'STAGED'));
+  s.orch.onVoiceEvent(end('A'));
+  s.orch.onVoiceTurnEnd('A', 'Text Priya');
+  // B starts while A's final belief is pending: forwarded, so the speculator rolls A back silently.
+  s.orch.onVoiceEvent(start('B'));
+  assert.ok(s.specTypes().includes('turn_start:B'));
+  s.orch.onSpeculatorEvent(sc('B', 'LISTENING'));
+  open();
+  await settle();
+  assert.equal(s.spoken.length, 0);
+  // Nothing awaits a confirm: the next turn is not held.
+  s.orch.onVoiceEvent(partial('B', 'Yes'));
+  s.orch.onVoiceEvent(end('B'));
+  assert.ok(s.specTypes().includes('turn_end:B'));
+});
+
+test('a superseded SPECULATING turn speaks nothing, and a stale STAGED for it is ignored', async () => {
+  let open!: () => void;
+  const gate = new Promise<void>((r) => (open = r));
+  const s = setup({ finalBelief: () => belief('draft_message', { person: 'Priya Shah' }), gate });
+  s.orch.onVoiceEvent(start('A'));
+  s.orch.onSpeculatorEvent(sc('A', 'LISTENING'));
+  s.orch.onTrackerEvent(bu('A', belief('draft_message', { person: 'Priya Shah' })));
+  s.orch.onSpeculatorEvent(sc('A', 'SPECULATING'));
+  s.orch.onVoiceEvent(end('A'));
+  s.orch.onVoiceTurnEnd('A', 'Text Priya');
+  s.orch.onVoiceEvent(start('B'));
+  open();
+  await settle();
+  s.orch.onSpeculatorEvent(sc('A', 'STAGED'));
+  assert.equal(s.spoken.length, 0);
+});
+
+test('an interjected turn that ends with an empty final flushes unchanged, and a later interject defers again', async () => {
+  const s = setup(correctionOpts);
+  s.orch.onVoiceEvent(start('t1'));
+  s.orch.onTrackerEvent(bu('t1', draft('thursday')));
+  s.orch.onTrackerEvent({ type: 'interject', turnId: 't1', text: INTERJECT });
+  s.orch.onVoiceEvent(eager('t1', ''));
+  s.orch.onVoiceEvent(final('t1', ''));
+  s.orch.onVoiceEvent(end('t1')); // VoiceSession does not call onTurnEnd for an empty final
+  await settle();
+  assert.deepEqual(s.specTypes(), ['turn_start:t1', 'belief_update:t1', 'turn_eager_end:t1', 'turn_end:t1']);
+  assert.equal(s.specEvents.filter((e) => e.type === 'belief_update' && e.belief.entities.day === 'friday').length, 0);
+  assert.equal(s.spoken.length, 0);
+  s.orch.onVoiceEvent(start('t2'));
+  s.orch.onTrackerEvent(bu('t2', draft('thursday')));
+  s.orch.onTrackerEvent({ type: 'interject', turnId: 't2', text: INTERJECT });
+  s.orch.onVoiceEvent(eager('t2', 'x'));
+  assert.equal(s.specTypes().at(-1), 'belief_update:t2', 'eager_end of t2 deferred');
 });
