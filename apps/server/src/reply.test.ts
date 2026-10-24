@@ -65,3 +65,13 @@ test('correctBelief with unresolvable day keeps weekday', () => {
   assert.equal(out.entities.day, 'someday');
   assert.equal(out.entities.weekday, 'thursday');
 });
+
+test('correctBelief makes the corrected value the only value and records the superseded one', () => {
+  const b = belief('draft_message', { person: 'Priya', day: 'thursday', message: "I'll see her Thursday at 2, thursday works" }, [claim]);
+  const out = correctBelief(b, claim, new Date(2026, 9, 24));
+  assert.equal(out.entities.day, 'friday');
+  assert.equal(out.entities.message, "I'll see her Friday at 2, Friday works");
+  assert.equal(out.entities.superseded_day, 'thursday');
+  assert.ok(!Object.entries(out.entities).some(([k, v]) => k !== 'superseded_day' && /thursday/i.test(v)));
+  assert.deepEqual(correctBelief(out, claim, new Date(2026, 9, 24)).entities, out.entities); // idempotent
+});

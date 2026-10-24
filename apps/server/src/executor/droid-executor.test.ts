@@ -52,7 +52,8 @@ const toolResult = (toolUseId: string, toolName: string) =>
 // edit: Edit call, no ToolResult (diff only at turn end). early: Edit + ToolResult, then afterWrite.
 // early-changed: like early, then a second change before the Result. create: Create of notes/new.md.
 // early-block: like early, then blocks until interrupted. early-fail: like early, then an error Result.
-type Phase2Mode = 'edit' | 'block' | 'throw' | 'early' | 'early-changed' | 'create' | 'early-block' | 'early-fail';
+// draft-thursday / draft-friday: Create of messages/outbox/priya.md naming that day, with a ToolResult.
+type Phase2Mode = 'edit' | 'block' | 'throw' | 'early' | 'early-changed' | 'create' | 'early-block' | 'early-fail' | 'draft-thursday' | 'draft-friday';
 interface FakeSession extends DroidLike {
   prompts: string[];
   calls: string[];
@@ -145,6 +146,14 @@ function factory(root: string, opts: { fail?: string } = {}): Factory {
               return;
             }
             if (mode === 'throw') throw new Error('stream exploded');
+            if (mode === 'draft-thursday' || mode === 'draft-friday') {
+              const day = mode === 'draft-thursday' ? 'Thursday' : 'Friday';
+              fs.writeFileSync(path.join(root, 'messages', 'outbox', 'priya.md'), `To: Priya Shah\n\nHi Priya, see you ${day} at 2.\n`);
+              yield call('3', 'Create', { file_path: 'messages/outbox/priya.md', content: day });
+              yield toolResult('3', 'Create');
+              yield result('success');
+              return;
+            }
             if (mode === 'create') {
               fs.mkdirSync(path.join(root, 'notes'), { recursive: true });
               fs.writeFileSync(path.join(root, 'notes', 'new.md'), '# new\n');
@@ -838,4 +847,53 @@ test('turn failure after staging emits result failed:true, throws, closes, keeps
   assert.equal(await git.isClean(), true);
   assert.deepEqual(specBranches(raw), []);
   assertValid(events);
+});
+
+const corrected = (): Belief => ({
+  ...belief('draft_message'),
+  entities: { person: 'Priya', day: 'friday', superseded_day: 'thursday' },
+});
+const outboxDiffs = (events: ServerEvent[]) => droid(events, 'diff').map((e) => (e.payload as { diff: string }).diff);
+
+test('post-check: a draft naming the superseded day is not staged; one rerun fixes it', async () => {
+  const { root, f, events, exec } = setup();
+  await exec.phase1('t1', corrected());
+  f.phase2.push('draft-thursday', 'draft-friday');
+  let staged = 0;
+  await exec.phase2('t1', corrected(), { onStaged: () => void staged++ });
+  const prompts = f.sessions[0]!.prompts;
+  assert.equal(prompts.length, 3);
+  assert.match(prompts[1]!, /^Correction: the user originally said thursday, this was corrected to friday\./m);
+  assert.match(prompts[2]!, /still mentions a value the user corrected/);
+  assert.equal(staged, 1);
+  assert.ok(outboxDiffs(events).every((d) => !/Thursday/.test(d)), 'no Thursday diff shown');
+  assert.ok(outboxDiffs(events).some((d) => /\+Hi Priya, see you Friday at 2\./.test(d)));
+  assert.ok(metrics(events).includes('phase2-reject'));
+  assert.deepEqual(droid(events, 'result').map((e) => (e.payload as { ok: boolean }).ok), [true]);
+  await exec.commit('t1');
+  assert.match(fs.readFileSync(path.join(root, 'messages', 'outbox', 'priya.md'), 'utf8'), /Friday/);
+  assertValid(events);
+});
+
+test('post-check: a draft still naming the superseded day after the rerun fails phase2 and stages nothing', async () => {
+  const { f, events, exec } = setup();
+  await exec.phase1('t1', corrected());
+  f.phase2.push('draft-thursday', 'draft-thursday');
+  let staged = 0;
+  await assert.rejects(exec.phase2('t1', corrected(), { onStaged: () => void staged++ }), SpeculationFailed);
+  assert.equal(f.sessions[0]!.prompts.length, 3);
+  assert.equal(staged, 0);
+  assert.deepEqual(outboxDiffs(events), []);
+  assertValid(events);
+});
+
+test('post-check: without an accepted correction the same draft stages with no rerun', async () => {
+  const { f, events, exec } = setup();
+  await exec.phase1('t1', belief('draft_message'));
+  f.phase2.push('draft-thursday');
+  let staged = 0;
+  await exec.phase2('t1', belief('draft_message'), { onStaged: () => void staged++ });
+  assert.equal(f.sessions[0]!.prompts.length, 2);
+  assert.equal(staged, 1);
+  assert.ok(!metrics(events).includes('phase2-reject'));
 });
