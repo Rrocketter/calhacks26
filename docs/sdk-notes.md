@@ -4,7 +4,7 @@ Numbers are measured output from the spike scripts, not estimates. Earlier runs 
 
 ## Summary for lanes
 
-- Moss: load `ahead-spike` / `ahead-corpus` at server startup (3-index cap, no other names). Queries are in-process, about 2 ms p50. Never call `loadIndex` on the request path (2 to 20 s).
+- Moss: load `ahead-corpus` and the `ahead-memory` session at server startup (3-index cap, no other names). Queries are in-process, about 2 ms p50. Never call `loadIndex` on the request path (2 to 20 s).
 - Ink 2: `turn.update` is cumulative, one about every 250 ms. `turn.eager_end` = finalize speculation, `turn.resume` = un-finalize (same turn), `turn.end` = close. Normalize numbers and punctuation before intent matching.
 - Sonic: use the WebSocket for the product (`/tts/bytes` is spike-only, TTFB 370 to 550 ms), model `sonic-3.6`, new `context_id` per reply. Cancel only stops ungenerated audio, so also drop late chunks and flush playback.
 - Droid: the workspace lives outside the repo (`~/.ahead/workspace`, `AHEAD_WORKSPACE` override), and Lane C must refuse a workspace located under the repo (`reset:workspace` already refuses; the executor does not exist yet).
@@ -86,9 +86,33 @@ Top-3 by `alpha` (hybrid weight, lower = more keyword):
 
 ### Index names (rule)
 
-- The free plan allows 3 indexes total.
-- The only allowed index names are `ahead-spike` (spikes) and `ahead-corpus` (Lane B owns it), both exported from `MOSS_INDEX` in `@ahead/contracts`.
+- The free plan allows 3 indexes total. The project also holds `product-search-context` (not ours; leave it alone), so only 2 slots are ours.
+- Our names are `ahead-corpus` (Lane B owns it) and `ahead-memory` (conversation memory), both exported from `MOSS_INDEX` in `@ahead/contracts`. `ahead-spike` was deleted on 2026-10-24 to make room for `ahead-memory`; `spike:moss` recreates it, so delete `ahead-memory` first if you need to run it.
 - No lane creates any other index.
+
+### Conversation memory (`ahead-memory`, 2026-10-24)
+
+- **Incremental upsert exists.** `client.session(name)` returns a `SessionIndex` whose `addDocs(docs, {upsert})` embeds and indexes in process (upsert is the default), and `query` sees the doc at once. No rebuild of a second index is needed. `pnpm --filter @ahead/server spike:memory` measures it.
+- **`pushIndex` only creates.** With the project at the 3-index cap, `pushIndex` on an index that already exists fails with "The project's usage limit has been reached; billing must be updated" (`UNAUTHORIZED`), even from a fresh session. Replacing seems to need a temporary extra slot. The first push (creating the index) works. After that, cloud `client.addDocs(name, docs, {upsert: true})` works; it polls until the server rebuild finishes.
+- **`session.loadIndex` of a missing index** resolves to 0 docs, no error. The store checks `getIndex` first and skips the load when the index is absent.
+- **Scores are not comparable across indexes.** For "what did I tell priya", the 2-doc memory index scored 0.48 to 0.64 and the corpus 0.07 to 0.39. Merging by score would let memory push the corpus out. `MossIndex.query` keeps the corpus top 3 (the interject's strong-hit ranks), then up to 2 memory hits with `minScore` 0.3, then the rest of the corpus, capped at k.
+- **What is written** (`apps/server/src/moss/memory.ts`, orchestrator):
+  - After each turn end: `memory-<turnId>` with the final transcript, a one-line belief summary and the outcome (`committed`, `rolled back`, `lookup`, `staged`, `no action`). It is upserted when a staged turn commits or rolls back. Bare yes/no turns write nothing.
+  - After each COMMITTED: `memory-<turnId>-artifact` with the added lines of the turn's last diff per file (the draft text) or "changed X to Y" (the calendar edit).
+  - Metadata `{type: 'memory', date, people, outcome}`. Memory snippets are 400 chars (corpus 160) so a lookup answer sees the committed text. The HUD tags `memory-` hits "memory" and always shows them in the Moss panel.
+- **Measured:**
+
+  | Step | Time |
+  | --- | --- |
+  | `client.session()` at startup | 1.0 to 2.0 s (20.8 s once) |
+  | `session.loadIndex` at startup, 0 docs / 11 docs | 0.6 s / 7.3 s (one slow run; corpus `loadIndex` was 18.7 s in the same run) |
+  | in-process `addDocs` (upsert), per doc | 7 to 47 ms |
+  | memory `query` | 3 to 10 ms, run in parallel with the corpus query |
+  | first `pushIndex` (creates the index) | 1.6 to 2.6 s, off the hot path |
+  | cloud `addDocs` upsert (rebuild), 1 doc | 2.9 to 3.9 s (10 s once), off the hot path |
+
+- **DEMO_MODE check:** `demo:run demo-utterance-1 --confirm=spoken`, then `memory:check` (fixture `demo-lookup-priya`, "What did I tell Priya?"). PASS in 2 of 2 runs: the final belief was `lookup` with `memory-<turn>-artifact` in its hits, first memory hit 0.8 s into the turn. The spoken answer: "You told Priya Shah in a message on October 24 that you'd see her Friday, October 30 at 2 to go over the Q3 deck." With memory populated, utterance 1 still interjects at about 3.1 s.
+- Memory persists across server restarts. To start clean, delete the `ahead-memory` index.
 
 ## Cartesia Sonic (TTS)
 
