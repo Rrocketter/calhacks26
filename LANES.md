@@ -28,7 +28,7 @@ Goal: mic in, Ink 2 `turn.update` out at ~250 ms cadence (measured), turn events
 
 Deliverables
 1. Browser: AudioWorklet capturing 16 kHz PCM, chunked over WS as `audio_chunk`. Playback via AudioContext queue with a `stopNow()` that ramps gain to 0 in 30 ms (used for barge-in).
-2. Server: `InkClient` wrapping Cartesia Ink 2 streaming STT. Emits `transcript_partial` on every `turn.update`, and surfaces `turn.eager_end` (finalize trigger), `turn.resume` (un-finalize), `turn.end` (closes the turn; emits `transcript_final` + `turn_end`). Log cadence.
+2. Server: `InkClient` wrapping Cartesia Ink 2 streaming STT. Emits `transcript_partial` on every `turn.update`, and surfaces `turn.eager_end` (finalize trigger), `turn.resume` (un-finalize), `turn.end` (closes the turn; emits `transcript_final` + `turn_end`). Also emit `turn_eager_end` / `turn_resume`. Log cadence.
 3. Server: `SonicClient` streaming TTS (WebSocket, `sonic-3.6`) to `tts_audio_chunk`. Function `speak(text, {interrupt:boolean})`. When `interrupt`, pause forwarding audio to Ink for 1.5 s so the agent does not transcribe itself.
 4. A `turnId` lifecycle: new id on first partial after a `turn_end`.
 5. Test against the mock belief tracker: when mock emits `interject`, Sonic speaks over the user and STT resumes cleanly.
@@ -45,12 +45,12 @@ Deliverables
 1. `scripts/gen-corpus.ts`: generate 300 to 500 synthetic docs for one fictional user (calendar events, contacts, notes, emails, file summaries) with metadata `{type, date, people[]}`. Must include the demo facts from PLAN.md section 5 verbatim.
 2. `MossIndex`: build index from corpus, load in-process at server start, `query(text, {k, filters})` returning hits + measured ms. Hybrid mode.
 3. `BeliefTracker` (pure logic, TDD this):
-   - `onUpdate(turnId, text)` (driven by Ink `turn.update`, ~250 ms): normalize text first (Ink writes "two" as "2" and adds punctuation), then 3-4 Moss queries: full text, last ~6 words, one per extracted entity. Merge into a recency-weighted accumulator per turn. ~60 queries per utterance at ~2 ms (measured p50 2.0 ms / p95 2.4 ms).
+   - `onUpdate(turnId, text)` (driven by Ink `turn.update`, ~250 ms): normalize text first (Ink writes "two" as "2" and adds punctuation), then 3-4 Moss queries: full text, last ~6 words, one per extracted entity. Merge into a recency-weighted accumulator per turn. ~60 queries per utterance at ~2 ms (3-4 queries per update, ~4 updates/s, for a ~4-5 s utterance; measured p50 2.0 ms / p95 2.4 ms).
    - on every Nth update, if the text changed, call Claude Haiku with `{partial, topHits}` and a strict JSON schema → `Belief`. Never block the Moss loop on this.
    - contradiction detection: when Haiku returns `claims` whose `said` conflicts with the `known` value from a top hit, and confidence ≥ 0.8, emit `interject` once per turn.
    - emits `belief_update` and `moss_hits` after every step.
    - `onEagerEnd(turnId, text)` finalizes slots (trigger for Phase 2); `onResume(turnId)` un-finalizes; `onTurnEnd(turnId, finalText)`: one Haiku call to confirm or revise the belief, returns final `Belief`.
-4. Thresholds in one config object: `SPECULATE_AT=0.75`, `INTERJECT_AT=0.8`, `LLM_EVERY_N_UPDATES`, `PARTIAL_DEBOUNCE_MS=100`.
+4. Thresholds in one config object: `SPECULATE_AT=0.75`, `INTERJECT_AT=0.8`, `LLM_EVERY_N_UPDATES`.
 5. Replay harness: feed a fixture of timed partials from the demo script and print the belief timeline. This is also the DEMO_MODE backbone.
 
 Done when: on the demo fixture, belief locks `draft_message` + `person=Priya` before the word "Thursday" arrives, and the contradiction fires at "Thursday".
@@ -63,7 +63,7 @@ Goal: a `Speculator` that turns a belief into staged, reversible, visible work v
 
 Deliverables
 1. `DroidExecutor` using `@factory/droid-sdk`:
-   - `prepare(turnId)`: `git checkout -b spec/<turnId>` inside `~/.ahead/workspace/`, create a Droid session with `cwd=~/.ahead/workspace/`. Call it at LISTENING so the session is warm (create 0.9 s warm / 2.2 s cold).
+   - Pre-create a warm Droid session at LISTENING with `cwd=~/.ahead/workspace/` (not tied to a turnId; create 0.9 s warm / 2.2 s cold). `prepare(turnId)` runs at belief lock, after turn.start assigns the turnId: `git checkout -b spec/<turnId>` inside `~/.ahead/workspace/`. On turn.resume, interrupt any running Phase 2 prompt and reset the spec branch to its post-Phase-1 commit; the next turn.eager_end sends Phase 2 again.
    - `speculate(turnId, belief)`, two phases in the same session. Phase 1 at belief lock: "open the target file, find the record, plan the edit, wait for details". Phase 2 at `turn.eager_end`: send the final slot values as a second turn. Build prompts from an action template (`reschedule_event`, `draft_message`, `add_note`, `find_file`). Stream every SDK event (plan text, tool use, tool result) to the WS as `droid_event`. After completion, compute `git diff main..spec/<turnId>` and emit as `droid_event kind:'diff'`.
    - Permission handler: allow read/write/edit only for paths under `~/.ahead/workspace/`; deny Execute, network, and anything else. Deny must be logged and surfaced to UI as a `droid_event kind:'tool'` with `denied:true` so judges see the safety layer working.
    - `commit(turnId)`: fast-forward merge to main, emit `state_change COMMITTED`.

@@ -4,7 +4,7 @@ Goal: a `Speculator` that turns a belief into staged, reversible, visible work v
 
 Deliverables
 1. `DroidExecutor` using `@factory/droid-sdk`:
-   - `prepare(turnId)`: `git checkout -b spec/<turnId>` inside `~/.ahead/workspace/`, create a Droid session with `cwd=~/.ahead/workspace/`. Call it at LISTENING so the session is warm (create 0.9 s warm / 2.2 s cold).
+   - Pre-create a warm Droid session at LISTENING with `cwd=~/.ahead/workspace/` (not tied to a turnId; create 0.9 s warm / 2.2 s cold). `prepare(turnId)` runs at belief lock, after turn.start assigns the turnId: `git checkout -b spec/<turnId>` inside `~/.ahead/workspace/`. On turn.resume, interrupt any running Phase 2 prompt and reset the spec branch to its post-Phase-1 commit; the next turn.eager_end sends Phase 2 again.
    - `speculate(turnId, belief)`, two phases in the same session. Phase 1 at belief lock: "open the target file, find the record, plan the edit, wait for details". Phase 2 at `turn.eager_end`: send the final slot values as a second turn. Build prompts from an action template (`reschedule_event`, `draft_message`, `add_note`, `find_file`). Stream every SDK event (plan text, tool use, tool result) to the WS as `droid_event`. After completion, compute `git diff main..spec/<turnId>` and emit as `droid_event kind:'diff'`.
    - Permission handler: allow read/write/edit only for paths under `~/.ahead/workspace/`; deny Execute, network, and anything else. Deny must be logged and surfaced to UI as a `droid_event kind:'tool'` with `denied:true` so judges see the safety layer working.
    - `commit(turnId)`: fast-forward merge to main, emit `state_change COMMITTED`.

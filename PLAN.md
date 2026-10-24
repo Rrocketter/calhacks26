@@ -7,11 +7,11 @@ Cal Hacks 13.0, Oct 23 to 25 2026. Solo build. Submission deadline Sunday 9:00 A
 
 ## 1. The one-line pitch
 
-Every voice assistant waits for you to stop talking, then thinks. AHEAD retrieves on every partial transcript (sub-10 ms via Moss), builds a live belief about what you want while you're still speaking, speculatively stages the action with a Factory Droid, and answers the instant you stop. If what you're saying contradicts what it knows, it cuts in mid-sentence.
+Every voice assistant waits for you to stop talking, then thinks. AHEAD retrieves on every Ink transcript update (sub-10 ms via Moss), builds a live belief about what you want while you're still speaking, speculatively stages the action with a Factory Droid, and answers the instant you stop. If what you're saying contradicts what it knows, it cuts in mid-sentence.
 
 ## 2. Why this can win
 
-- The core trick (retrieval on every Ink update, ~60 queries per utterance at ~2 ms, measured p50 2.0 ms / p95 2.4 ms) is only possible because Moss runs in-process at sub-10 ms. A cloud vector DB at 200 to 500 ms cannot do this. That is the "impossible made possible" hook sponsors asked for.
+- The core trick (retrieval on every Ink update, ~60 queries per utterance at ~2 ms (3-4 queries per update, ~4 updates/s, for a ~4-5 s utterance), measured p50 2.0 ms / p95 2.4 ms) is only possible because Moss runs in-process at sub-10 ms. A cloud vector DB at 200 to 500 ms cannot do this. That is the "impossible made possible" hook sponsors asked for.
 - Voice is the entire interface, not a feature. Cartesia's turn detection literally decides when speculation becomes commitment.
 - Droid does real work on a trigger (belief confidence threshold), with scoped permissions, visible plan/steps/diffs, and rollback. That is Factory's rubric nearly verbatim.
 - Speculative execution with cancellation and rollback is a real systems problem. Solo plus technically complex is a credible pairing.
@@ -22,7 +22,7 @@ Every voice assistant waits for you to stop talking, then thinks. AHEAD retrieve
 | Track | Must-haves | How AHEAD satisfies it |
 |---|---|---|
 | Best Solo Hack | Team of 1 on Devpost, live demo, full judging window | Yes by construction |
-| Moss | Moss used meaningfully; voice agent / personal agent that remembers you | Moss is queried on every partial transcript. Latency HUD shows per-query ms. Project collapses without it. |
+| Moss | Moss used meaningfully; voice agent / personal agent that remembers you | Moss is queried on every Ink transcript update. Latency HUD shows per-query ms. Project collapses without it. |
 | Moss Social Post | Post with engagement | Post a 20 to 30 s clip of the interjection moment with the latency HUD visible, tag @usemoss |
 | Cartesia | Voice core to product, 2-min demo-first pitch, README with setup + features used + limitations, no keys in repo, accessibility/privacy/responsible-use addressed | Ink 2 streaming STT + turn detection, Sonic 3.6 WebSocket streaming TTS with barge-in. README sections written. Privacy: corpus is local, nothing leaves except STT/TTS audio. |
 | Factory Droid SDK | Droid does real work in the running product, runs on a designed trigger, scoped permissions with safety, visible plans/steps/diffs/results, README explains where Droid is used, no chatbot wrapper, no slides-only demo | Droid dispatched when belief confidence crosses threshold. Permission handler allows writes only under `~/.ahead/workspace/`, denies Execute and network. All Droid tool events stream to the UI. Staged work lives on a git branch and is committed or discarded. |
@@ -87,10 +87,12 @@ type Belief = {
 ```
 
 ### Speculation rules
-- Fire Droid at most once per turn. If belief intent changes after dispatch, abort and discard.
+- One Droid session per turn, at most two prompts (Phase 1 plan, Phase 2 slots). If intent changes after dispatch, abort and discard.
 - Droid may only touch `~/.ahead/workspace/`. Execute tool disabled. No network.
 - Read/LS bypass the permission handler, so the workspace sits outside the repo, tools are disabled, and a watchdog aborts stray runs (see `docs/sdk-notes.md`, Droid section).
-- Two-phase speculation. Phase 1 at belief lock: warm session gets "open the target file, find the record, plan the edit, wait for details". Phase 2 at `turn.eager_end`: final slot values go in as a second turn of the same session. `turn.resume` un-finalizes, `turn.end` closes the turn.
+- Two-phase speculation. Phase 1 at belief lock: warm session gets "open the target file, find the record, plan the edit, wait for details". Phase 2 at `turn.eager_end`: final slot values go in as a second turn of the same session. `turn.resume` un-finalizes, `turn.end` closes the turn. The server forwards `turn_eager_end` and `turn_resume` to the UI as s2c events.
+- On turn.resume, interrupt any running Phase 2 prompt and reset the spec branch to its post-Phase-1 commit; the next turn.eager_end sends Phase 2 again.
+- Pre-create a warm Droid session at LISTENING (not tied to a turnId); the spec/<turnId> branch is created at belief lock, after turn.start assigns the turnId.
 - Every speculation runs on branch `spec/<turnId>`. COMMIT = fast-forward merge to main. ROLLBACK = branch delete.
 - Visible state machine in UI: LISTENING → BELIEF_FORMING → SPECULATING → STAGED → (COMMITTED | ROLLED_BACK)
 
@@ -137,7 +139,7 @@ Corpus facts to seed: meeting with Priya is Friday 2 PM. Project file "q3-deck.p
 | Sun 6 AM to 9 AM | Final Devpost, social post, rehearse 2-min pitch 5 times |
 
 ## 8. Risks and mitigations
-- Ink partial rate too slow or bursty → debounce to 100 ms, query on diff only.
+- Ink update rate bursty or slow → query on every turn.update, diff only; no debounce needed at Ink's ~250 ms cadence.
 - Haiku belief call too slow → run on every Nth `turn.update`, never block Moss loop; Moss hits alone can drive speculation for simple intents.
 - Droid startup latency (spawns CLI) → keep one warm session per turn, pre-create at LISTENING.
 - Barge-in audio clipping → use AudioContext with gain ramp, stop STT ingest during TTS.

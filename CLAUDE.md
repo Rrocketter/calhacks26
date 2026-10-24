@@ -31,6 +31,6 @@ Read PLAN.md first. It is the source of truth for scope, action set, state machi
 - Use `requesting-code-review` before signaling a lane is ready to merge.
 
 ## Sponsor requirements that must survive to the end
-- Cartesia README section: setup, features used (Ink 2 streaming + turn detection, Sonic 3.5 streaming, barge-in), known limitations, accessibility/privacy/responsible-use notes.
+- Cartesia README section: setup, features used (Ink 2 streaming + turn detection, Sonic 3.6 WebSocket streaming, barge-in), known limitations, accessibility/privacy/responsible-use notes.
 - Factory README section: where Droid runs, the trigger, the permission handler, how plans/steps/diffs are surfaced, commit/rollback.
 - Moss README section: why in-process retrieval is load-bearing, queries per utterance, measured latency.
