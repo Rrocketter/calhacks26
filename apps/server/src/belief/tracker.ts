@@ -1,6 +1,6 @@
-import type { Belief, MossHit, ServerEvent } from '@ahead/contracts';
+import type { Belief, Claim, MossHit, ServerEvent } from '@ahead/contracts';
 import { logLatency } from '../log.js';
-import { BELIEF_CONFIG, type BeliefConfig } from './config.js';
+import { BELIEF_CONFIG, INTERJECT_TEMPLATE, type BeliefConfig } from './config.js';
 import { extractToDay, makeEntityExtractor, resolveDay, type FastEntities } from './entities.js';
 import { lastWords, normalize } from './normalize.js';
 import type { IntentLlm, IntentResult, RetrievedHit, Retriever } from './types.js';
@@ -33,8 +33,45 @@ type TurnState = {
   belief?: Belief;
   locked: boolean;
   finalized: boolean;
+  /** Bumped by onResume so a pending onEagerEnd does not finalize after a resume. */
+  resumeGen: number;
+  /** Set once onTurnEnd starts: no more streaming llm calls or follow-ups for this turn. */
+  ending: boolean;
+  interjectClaim?: Claim;
   chain: Promise<void>;
 };
+
+/** Strong hit: the doc's rank in the accumulator topHits. */
+const STRONG_HIT_RANK = 3;
+
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/** Whole-word containment on normalized text. */
+function containsWords(haystack: string, needle: string): boolean {
+  return needle !== '' && ` ${haystack} `.includes(` ${needle} `);
+}
+
+/** Leading hour of a normalized time ("2 pm" -> "2"). */
+function hourOf(time: string): string {
+  return /^\d{1,2}/.exec(normalize(time))?.[0] ?? normalize(time);
+}
+
+function sameValue(field: string, a: string, b: string): boolean {
+  return field === 'time' ? hourOf(a) === hourOf(b) : normalize(a) === normalize(b);
+}
+
+function unknownBelief(): Belief {
+  return {
+    intent: 'unknown',
+    entities: {},
+    claims: [],
+    confidence: 0,
+    topHits: [],
+    latencyMs: { moss: 0 },
+  };
+}
 
 function clamp01(x: number): number {
   if (!Number.isFinite(x)) return 0;
@@ -92,6 +129,73 @@ export class BeliefTracker {
     return st.chain;
   }
 
+  /** Process the eager-end text, wait for in-flight llm calls, then mark the turn finalized. */
+  onEagerEnd(turnId: string, text: string): Promise<void> {
+    const st = this.getOrCreate(turnId);
+    const gen = st.resumeGen;
+    void this.onUpdate(turnId, text);
+    const step = st.chain.then(async () => {
+      await this.idle();
+      if (st.resumeGen === gen && this.turns.get(turnId) === st) st.finalized = true;
+    });
+    st.chain = step;
+    return step;
+  }
+
+  /** The user kept talking: clear finalized only. Unknown turns are ignored. */
+  onResume(turnId: string): void {
+    const st = this.turns.get(turnId);
+    if (!st) return;
+    st.resumeGen++;
+    st.finalized = false;
+  }
+
+  /**
+   * One final llm call over the final text, queued behind pending updates. Its seq is newer
+   * than any streaming call, so a late streaming result is dropped. Deletes the turn state.
+   */
+  onTurnEnd(turnId: string, finalText: string): Promise<Belief> {
+    const st = this.turns.get(turnId);
+    if (!st) return Promise.resolve(unknownBelief());
+    const step = st.chain.then(() => this.doTurnEnd(turnId, st, finalText));
+    st.chain = step.then(
+      () => undefined,
+      () => undefined,
+    );
+    return step;
+  }
+
+  private async doTurnEnd(turnId: string, st: TurnState, finalText: string): Promise<Belief> {
+    st.ending = true;
+    st.llmPending = false;
+    const seq = st.nextSeq++;
+    const norm = normalize(finalText);
+    if (norm !== st.normText) {
+      st.rawText = finalText;
+      st.normText = norm;
+      st.fast = this.extract(norm);
+    }
+    try {
+      const { result, latencyMs } = await this.deps.llm.classify({
+        partial: finalText,
+        topHits: st.topHits.map(toMossHit),
+        final: true,
+      });
+      logLatency('llm', 'final', latencyMs);
+      st.lastAppliedSeq = Math.max(st.lastAppliedSeq, seq);
+      st.llmResult = result;
+      st.llmMs = latencyMs;
+      this.rebuild(turnId, st);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.log(`[llm] error ${message}`);
+      this.deps.emit({ type: 'error', source: 'llm', message });
+    } finally {
+      if (this.turns.get(turnId) === st) this.turns.delete(turnId);
+    }
+    return st.belief ?? unknownBelief();
+  }
+
   private getOrCreate(turnId: string): TurnState {
     let st = this.turns.get(turnId);
     if (!st) {
@@ -111,6 +215,8 @@ export class BeliefTracker {
         lastAppliedSeq: 0,
         locked: false,
         finalized: false,
+        resumeGen: 0,
+        ending: false,
         chain: Promise.resolve(),
       };
       this.turns.set(turnId, st);
@@ -174,7 +280,7 @@ export class BeliefTracker {
     const newEntity = (Object.keys(fast) as (keyof FastEntities)[]).some(
       (k) => fast[k] !== st.llmEntitiesAtLastCall[k],
     );
-    if (everyN || newEntity) {
+    if ((everyN || newEntity) && !st.ending) {
       if (st.llmInFlight) st.llmPending = true;
       else this.startLlm(turnId, st);
     }
@@ -223,8 +329,11 @@ export class BeliefTracker {
       .classify({ partial: st.rawText, topHits: st.topHits.map(toMossHit) })
       .then(
         ({ result, latencyMs }) => {
+          if (seq < st.lastAppliedSeq) {
+            console.log(`[llm] stale seq=${seq} dropped`);
+            return;
+          }
           if (this.turns.get(turnId) !== st) return;
-          if (seq < st.lastAppliedSeq) return; // stale
           st.lastAppliedSeq = seq;
           st.llmResult = result;
           st.llmMs = latencyMs;
@@ -239,7 +348,9 @@ export class BeliefTracker {
       .finally(() => {
         this.inFlight.delete(p);
         st.llmInFlight = false;
-        if (st.llmPending && this.turns.get(turnId) === st) this.startLlm(turnId, st);
+        if (st.llmPending && !st.ending && this.turns.get(turnId) === st) {
+          this.startLlm(turnId, st);
+        }
       });
     this.inFlight.add(p);
   }
@@ -282,10 +393,15 @@ export class BeliefTracker {
         ? clamp01(this.cfg.W_LLM * clamp01(llm?.confidence ?? 0) + this.cfg.W_MOSS * st.mossSupport)
         : clamp01(Math.min(0.5, this.cfg.W_MOSS * st.mossSupport));
 
+    const claims = [...(llm?.claims ?? [])];
+    const fired = st.interjectClaim;
+    if (fired && !claims.some((c) => c.docId === fired.docId && c.field === fired.field)) {
+      claims.push(fired);
+    }
     const belief: Belief = {
       intent,
       entities,
-      claims: llm?.claims ?? [],
+      claims,
       confidence,
       topHits: st.topHits.map(toMossHit),
       latencyMs: st.llmMs === undefined ? { moss: st.mossMs } : { moss: st.mossMs, llm: st.llmMs },
@@ -298,6 +414,67 @@ export class BeliefTracker {
         `[belief] lock ${intent} ${entities.person ?? '-'} conf=${confidence.toFixed(2)}`,
       );
     }
+    const interject = this.checkContradiction(st, belief);
     this.deps.emit({ type: 'belief_update', turnId, belief });
+    if (interject) this.deps.emit({ type: 'interject', turnId, text: interject });
+  }
+
+  /** Fast-path claim: person + day (or time when no day) vs a strong calendar hit for that person. */
+  private fastClaim(st: TurnState): Claim | undefined {
+    const { person, day, time } = st.fast;
+    if (!person || (!day && !time)) return undefined;
+    const name = person.toLowerCase();
+    const doc = st.topHits
+      .slice(0, STRONG_HIT_RANK)
+      .find(
+        (h) =>
+          h.metadata.type === 'calendar' &&
+          (h.metadata.people ?? '').toLowerCase().includes(name),
+      );
+    if (!doc) return undefined;
+    const field = day ? 'day' : 'time';
+    const said = (day ?? time)!;
+    const known = doc.metadata[field];
+    if (!known || sameValue(field, said, known)) return undefined;
+    return {
+      field,
+      said: capitalize(said),
+      known: field === 'day' ? capitalize(normalize(known)) : known,
+      docId: doc.docId,
+    };
+  }
+
+  /**
+   * Picks the first verified candidate (llm claims, then the fast path). On a hit, records the
+   * claim on the belief and returns the interject text. Max one per turn.
+   */
+  private checkContradiction(st: TurnState, belief: Belief): string | undefined {
+    if (st.interjectClaim) return undefined;
+    if (!st.locked || belief.confidence < this.cfg.INTERJECT_AT) return undefined;
+    const fast = this.fastClaim(st);
+    const candidates = [...belief.claims, ...(fast ? [fast] : [])];
+    for (const c of candidates) {
+      const rank = st.topHits.findIndex((h) => h.docId === c.docId);
+      if (rank < 0 || rank >= STRONG_HIT_RANK) continue;
+      const doc = st.topHits[rank]!;
+      const said = normalize(c.said);
+      const known = normalize(c.known);
+      if (!said || !known || sameValue(c.field, c.said, c.known)) continue;
+      const docText = normalize(`${doc.snippet} ${Object.values(doc.metadata).join(' ')}`);
+      if (!containsWords(docText, known)) continue;
+      if (!containsWords(st.normText, said)) continue;
+      if (belief.intent === 'reschedule_event' && said === belief.entities.to_weekday) continue;
+
+      const person = belief.entities.person ?? (doc.metadata.people ?? '').split(',')[0] ?? '';
+      const first = person.trim().split(/\s+/)[0] ?? '';
+      const text = INTERJECT_TEMPLATE.replace('{person}', first)
+        .replaceAll('{known}', capitalize(c.known.trim()))
+        .replace('{said}', capitalize(c.said.trim()));
+      st.interjectClaim = c;
+      if (!belief.claims.some((x) => x === c)) belief.claims.push(c);
+      console.log(`[belief] interject ${c.field} said=${c.said} known=${c.known} doc=${c.docId}`);
+      return text;
+    }
+    return undefined;
   }
 }
