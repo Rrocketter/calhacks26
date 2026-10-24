@@ -11,8 +11,16 @@ const MARKER = '.ahead-workspace';
 
 const isInside = (child, parent) => {
   const rel = path.relative(parent, child);
-  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+  return rel === '' || (rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel));
 };
+
+// Empty or unset means the default. A leading ~ expands to home.
+export function resolveWorkspace(raw, home) {
+  const value = raw || path.join(home, '.ahead', 'workspace');
+  if (value === '~') return path.resolve(home);
+  if (value.startsWith('~/')) return path.resolve(home, value.slice(2));
+  return path.resolve(value);
+}
 
 // Pure path guard. Returns a refusal reason, or null if the path is acceptable.
 export function checkTarget(target, { repoRoot, home }) {
@@ -42,7 +50,7 @@ function main() {
   const start = performance.now();
   const repoRoot = canonical(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'));
   const home = canonical(os.homedir());
-  const target = canonical(path.resolve(process.env.AHEAD_WORKSPACE ?? path.join(os.homedir(), '.ahead', 'workspace')));
+  const target = canonical(resolveWorkspace(process.env.AHEAD_WORKSPACE, os.homedir()));
   const seed = path.join(repoRoot, 'workspace-seed');
 
   const refuse = (reason) => {
@@ -64,17 +72,17 @@ function main() {
 
   rmSync(target, { recursive: true, force: true });
   mkdirSync(target, { recursive: true });
+  writeFileSync(path.join(target, MARKER), 'created by scripts/reset-workspace.mjs\n');
   cpSync(seed, target, { recursive: true });
 
   const env = { ...process.env };
-  for (const key of ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE']) delete env[key];
+  for (const key of Object.keys(env)) if (key.startsWith('GIT_')) delete env[key];
   const git = (...args) =>
     execFileSync('git', ['-C', target, '-c', 'core.hooksPath=/dev/null', ...args], { stdio: 'pipe', env });
 
   git('init', '-b', 'main');
   mkdirSync(path.join(target, '.git', 'info'), { recursive: true });
   writeFileSync(path.join(target, '.git', 'info', 'exclude'), `${MARKER}\n`, { flag: 'a' });
-  writeFileSync(path.join(target, MARKER), 'created by scripts/reset-workspace.mjs\n');
   git('add', '-A');
   git(
     '-c', 'user.name=ahead',
@@ -86,4 +94,4 @@ function main() {
   console.log(`[workspace] reset ${target} in ${(performance.now() - start).toFixed(0)}ms`);
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main();
+if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) main();

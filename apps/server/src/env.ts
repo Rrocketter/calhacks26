@@ -1,4 +1,5 @@
 import { fileURLToPath } from 'node:url';
+import { existsSync, realpathSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -13,4 +14,17 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const up = path.basename(path.dirname(here)) === 'dist' ? 4 : 3;
 export const REPO_ROOT = path.resolve(here, ...Array<string>(up).fill('..'));
 // Outside the repo on purpose: Droid's Read/LS tools bypass the permission handler.
-export const WORKSPACE_DIR = path.resolve(process.env.AHEAD_WORKSPACE ?? path.join(os.homedir(), '.ahead', 'workspace'));
+// Same resolution as scripts/reset-workspace.mjs (empty = default, leading ~ expands, canonical path).
+function resolveWorkspace(): string {
+  const home = os.homedir();
+  const raw = process.env.AHEAD_WORKSPACE || path.join(home, '.ahead', 'workspace');
+  const abs = raw === '~' ? home : raw.startsWith('~/') ? path.join(home, raw.slice(2)) : raw;
+  const rest: string[] = [];
+  let cur = path.resolve(abs);
+  while (!existsSync(cur)) {
+    rest.unshift(path.basename(cur));
+    cur = path.dirname(cur);
+  }
+  return path.join(realpathSync.native(cur), ...rest);
+}
+export const WORKSPACE_DIR = resolveWorkspace();
