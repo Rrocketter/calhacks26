@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Belief, ServerEvent } from '@ahead/contracts';
-import { findWord, hudReducer, initialHud, type HudAction, type HudState } from './state';
+import { findWord, hudReducer, initialHud, pendingConfirm, type HudAction, type HudState } from './state';
 
 const TEXT = "Draft a message to Priya saying, I'll see her Thursday";
 
@@ -196,11 +196,15 @@ describe('hudReducer', () => {
   });
 
   it('opens and closes the confirm window from the confirm_window metric', () => {
-    let s = run([{ type: 'metric', source: 'ink', label: 'confirm_window', ms: 6000 }]);
-    expect(s.confirmWindow).toBe(true);
+    let s = run([{ type: 'metric', source: 'ink', label: 'confirm_window:correction:t1', ms: 4000 }]);
+    expect(s.confirm).toEqual({ kind: 'correction', turnId: 't1' });
+    expect(pendingConfirm(s, 'live', true)).toEqual({ kind: 'correction', turnId: 't1' });
+    expect(pendingConfirm(s, 'live', false)).toBeNull();
     expect(s.ttfa).toEqual({});
     s = run([{ type: 'metric', source: 'ink', label: 'confirm_window', ms: 0 }], s);
-    expect(s.confirmWindow).toBe(false);
+    expect(s.confirm).toBeNull();
+    s = run([{ type: 'metric', source: 'ink', label: 'confirm_window:apply:t2', ms: 6000 }], s);
+    expect(s.confirm).toEqual({ kind: 'apply', turnId: 't2' });
   });
 
   it('tracks ttfa, errors and reset', () => {

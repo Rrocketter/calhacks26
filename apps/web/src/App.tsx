@@ -2,11 +2,12 @@ import { useEffect, useReducer, useRef, useState } from 'react';
 import { MockSocket } from './mock/socket';
 import { startLive } from './live/session';
 import type { Transport } from './transport';
-import { hudReducer, initialHud } from './hud/state';
+import { hudReducer, initialHud, pendingConfirm, type ConfirmTarget } from './hud/state';
 import { TopBar } from './hud/TopBar';
 import { Transcript } from './hud/Transcript';
 import { BeliefPanel } from './hud/BeliefPanel';
 import { ExecutorPanel } from './hud/ExecutorPanel';
+import { ConfirmCard } from './hud/ConfirmCard';
 
 const params = new URLSearchParams(location.search);
 const mode: 'live' | 'mock' = params.get('mock') === '1' ? 'mock' : 'live';
@@ -20,6 +21,8 @@ export function App() {
   const transport = useRef<Transport | null>(null);
   const mock = useRef<MockSocket | null>(null);
   const stopping = useRef(false); // Stop pressed: the close that follows is not an error
+  // The confirm target already answered by click or key: the first answer wins, the card hides.
+  const [answered, setAnswered] = useState<string | null>(null);
 
   useEffect(
     () => () => {
@@ -84,6 +87,16 @@ export function App() {
     transport.current?.send({ type: 'confirm_action', turnId: hud.stateTurnId, apply });
   }
 
+  const target = pendingConfirm(hud, mode, running);
+  const targetKey = target && `${target.kind}:${target.turnId}`;
+
+  function answer(t: ConfirmTarget, apply: boolean) {
+    const key = `${t.kind}:${t.turnId}`;
+    if (answered === key) return;
+    setAnswered(key);
+    transport.current?.send({ type: 'confirm_action', turnId: t.turnId, apply });
+  }
+
   return (
     // data-state drives the ambient hue (LISTENING cool, SPECULATING / STAGED accent, outcome green / red).
     <div className="hud" data-state={hud.state}>
@@ -102,6 +115,9 @@ export function App() {
       <Transcript hud={hud} error={hud.error ?? startError} />
       <BeliefPanel hud={hud} />
       <ExecutorPanel hud={hud} canSend={running || mode === 'mock'} onConfirm={confirm} />
+      {target && targetKey !== answered && (
+        <ConfirmCard key={targetKey} hud={hud} target={target} onAnswer={(apply) => answer(target, apply)} />
+      )}
     </div>
   );
 }

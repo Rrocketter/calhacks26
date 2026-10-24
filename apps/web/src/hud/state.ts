@@ -30,9 +30,10 @@ export type HudState = {
   diffs: { file: string; diff: string }[]; // one per file, a repeat replaces in place
   result: DroidResult | null;
   ttfa: { client?: number; server?: number }; // reset at turn_end
-  confirmWindow: boolean; // the server is listening for a spoken yes / no
+  confirm: ConfirmTarget | null; // the server is listening for a yes / no (confirm_window metric)
   error: string | null;
 };
+export type ConfirmTarget = { kind: 'correction' | 'apply'; turnId: string };
 export type HudAction = ServerEvent | { type: 'client_ttfa'; ms: number } | { type: 'reset' };
 
 export function initialHud(): HudState {
@@ -55,7 +56,7 @@ export function initialHud(): HudState {
     diffs: [],
     result: null,
     ttfa: {},
-    confirmWindow: false,
+    confirm: null,
     error: null,
   };
 }
@@ -97,6 +98,25 @@ function interjectSaid(belief: Belief | null, text: string): string | null {
   };
   const hit = claims.find((c) => named(c.known) || named(c.said));
   return (hit ?? claims[0])?.said ?? null;
+}
+
+// `confirm_window:<kind>:<turnId>` with ms > 0 opens the window, ms 0 closes it.
+function confirmTarget(s: HudState, label: string, ms: number): ConfirmTarget | null {
+  if (ms <= 0) return null;
+  const [, kind, turnId] = label.split(':');
+  if ((kind === 'correction' || kind === 'apply') && turnId) return { kind, turnId };
+  return s.stateTurnId ? { kind: 'apply', turnId: s.stateTurnId } : null;
+}
+
+/** What a yes / no answers right now. The mock never sends confirm_window: there it is staged work after the turn ended. */
+export function pendingConfirm(s: HudState, mode: 'live' | 'mock', running: boolean): ConfirmTarget | null {
+  if (mode === 'live') return running ? s.confirm : null;
+  const staged =
+    s.state === 'STAGED' &&
+    s.stateTurnId !== null &&
+    s.droidTurnId === s.stateTurnId &&
+    s.finals.some((f) => f.turnId === s.stateTurnId);
+  return staged ? { kind: 'apply', turnId: s.stateTurnId! } : null;
 }
 
 function promote(s: HudState, turnId: string): HudState {
@@ -216,7 +236,7 @@ export function hudReducer(s: HudState, a: HudAction): HudState {
     case 'droid_event':
       return applyDroid(s, a);
     case 'metric':
-      if (a.label === 'confirm_window') return { ...s, confirmWindow: a.ms > 0 };
+      if (a.label.startsWith('confirm_window')) return { ...s, confirm: confirmTarget(s, a.label, a.ms) };
       return a.source === 'sonic' && a.label === 'ttfa'
         ? { ...s, ttfa: { ...s.ttfa, server: a.ms } }
         : s;

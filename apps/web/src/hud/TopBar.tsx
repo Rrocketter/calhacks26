@@ -1,4 +1,4 @@
-import type { HudState } from './state';
+import { pendingConfirm, type HudState } from './state';
 import { LevelMeter, Tween } from './motion';
 
 type Props = {
@@ -33,14 +33,7 @@ export function TopBar({ hud, mode, running, starting, onStart, onStop, onDemo }
   const { count, totalMs } = hud.moss;
   const avg = count ? totalMs / count : null;
   const ttfa = hud.ttfa.client ?? hud.ttfa.server;
-  // Live: the server's confirm_window metric. The mock never sends it, so there it is
-  // staged work for this turn after the turn has ended.
-  const awaiting =
-    mode === 'live'
-      ? running && hud.confirmWindow
-      : hud.state === 'STAGED' &&
-        hud.droidTurnId === hud.stateTurnId &&
-        hud.finals.some((f) => f.turnId === hud.stateTurnId);
+  const awaiting = pendingConfirm(hud, mode, running) !== null;
   return (
     <header className="topbar">
       <span className="wordmark">
