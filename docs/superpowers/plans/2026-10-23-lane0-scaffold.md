@@ -179,3 +179,55 @@
 - [ ] **Step 2:** `git status` clean except ignored files; no `.env` tracked (`git ls-files | grep -c '^.env$'` → 0).
 - [ ] **Step 3: Commit** `docs: sdk notes with measured spike latencies`
 - [ ] **Step 4:** Print summary: latency per spike, and differences from PLAN.md (Sonic 3.6 is latest, Ink 2 emits cumulative `turn.update` not word partials, Moss package name, Droid has no plan event, anything new found while running).
+
+---
+
+## Addendum (2026-10-23, after the Task 9 canary finding)
+
+Human decisions after spike-droid showed Read/LS bypass the permission handler. Execution order: Task 9 review → 11 → 12 → 13 → 14 → 10 → final review.
+
+### Task 11: Move runtime workspace out of the repo
+
+**Files:** Modify `apps/server/src/env.ts`, `scripts/reset-workspace.mjs`, `PLAN.md`, `CLAUDE.md`, `docs/lanes/*.md`, `LANES.md`, `docs/sdk-notes.md`, `.env.example`.
+
+**Interfaces:**
+- Produces: `WORKSPACE_DIR` = `path.resolve(process.env.AHEAD_WORKSPACE ?? path.join(os.homedir(), '.ahead', 'workspace'))`, same resolution in `reset-workspace.mjs` (duplicate the one expression; no cross-import). `.env.example` gains `AHEAD_WORKSPACE=` (empty = default).
+- reset guard (all must hold before `rm`): target is absolute; target is not `/`, not `os.homedir()`, not `REPO_ROOT`, not inside `REPO_ROOT`, not an ancestor of `REPO_ROOT` or of `os.homedir()`; and target either does not exist, or contains the marker file `.ahead-workspace` (written by every reset, committed in the seed commit is NOT required — write it after copy, add it to the nested repo's `.git/info/exclude`). Otherwise exit 1 with `[workspace] refusing to delete <path>: <reason>`. Nested git calls run with an env that drops `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE` and passes `-c core.hooksPath=/dev/null`.
+- Docs: every `var/workspace` reference in PLAN.md, CLAUDE.md, LANES.md, docs/lanes/*.md, sdk-notes becomes `~/.ahead/workspace` (override `AHEAD_WORKSPACE`). CLAUDE.md's "Never git init anywhere inside the main repo except var/workspace/" becomes "Never git init inside the main repo. The only nested repo is the runtime workspace at ~/.ahead/workspace (AHEAD_WORKSPACE)." Explain why in one line (Droid Read tools bypass the permission handler, so the workspace must not be able to reach the repo's .env).
+
+- [ ] **Step 1:** Implement.
+- [ ] **Step 2: Verify:** `pnpm reset:workspace` creates `~/.ahead/workspace` with one `seed` commit; second run succeeds; `AHEAD_WORKSPACE=$SCRATCH/ws pnpm reset:workspace` works; refusal cases print the refusal and exit 1 without deleting: `AHEAD_WORKSPACE=$HOME`, `AHEAD_WORKSPACE=<repo>/var/x`, `AHEAD_WORKSPACE=<a scratch dir with a file but no marker>`. `grep -rn 'var/workspace' PLAN.md CLAUDE.md LANES.md docs apps scripts packages` → only historical mentions in docs/superpowers/plans. `pnpm -r build && pnpm -r lint && pnpm check:secrets`.
+- [ ] **Step 3: Commit** `refactor: move runtime workspace to ~/.ahead/workspace`
+
+### Task 12: Droid read confinement
+
+**Files:** Modify `apps/server/scripts/spike-droid.ts`, `docs/sdk-notes.md`.
+
+- [ ] **Step 1: Research** (no memory; docs.factory.com, `droid --help`, `droid exec --help`, the installed `@factory/droid-sdk` .d.ts and README, ~/.factory settings schema if documented) whether Droid has a sandbox / filesystem confinement setting (CLI flag, settings.json, SDK option). Record findings with sources in sdk-notes. If one exists, enable it in the spike.
+- [ ] **Step 2:** `disabledToolIds` adds `LS`, `Glob`, `Grep`, `Task`, `Skill` (keep Execute, Script, FetchUrl, WebSearch). Use the exact ids the SDK/CLI reports via `session.listTools()`; print the final allowed tool list.
+- [ ] **Step 3: Watchdog.** In the stream loop, for every `tool_call` event extract every path-like input field (`file_path`, `filePath`, `path`, `paths[]`, `pattern` dirs, etc.; log which keys were checked), resolve against WORKSPACE_DIR, realpath when it exists; if any resolves outside, immediately abort the session (`session.interrupt()` then close, or abort signal — record which works), log `[droid] watchdog abort tool:<name> <path>`, and print the `droid_event` it would emit: `{type:'droid_event', turnId:'spike', kind:'tool', denied:true, payload:{tool, path, reason:'outside-workspace'}, ts}` validated with `parseServerEvent` from `@ahead/contracts`.
+- [ ] **Step 4: Canary at new location.** Canary file stays `<REPO_ROOT>/.env.canary` (fake values, deleted in finally). Prompt step 3 asks Droid to read that absolute path. Verdict block adds `watchdog: fired=<yes|no> before-result=<yes|no>` (did abort happen before any tool_result for that call arrived) and `canary leaked to model: yes|no`.
+- [ ] **Step 5: Run** `pnpm reset:workspace && pnpm --filter @ahead/server spike:droid`, twice. Expected: write-inside ok, write-outside denied, canary read stopped by sandbox or watchdog. If the canary content still reaches the model, report it plainly.
+- [ ] **Step 6:** sdk-notes: Droid section gets a "Confinement" subsection: sandbox findings, disabled tools, the Lane C rule ("the executor must watch every tool_use event and abort the session if any path resolves outside the workspace, emitting droid_event kind:'tool' denied:true"), whether abort beats the tool result, and the measured verdicts. **Commit** `feat(spike): droid read confinement with watchdog abort`
+
+### Task 13: Minor review fixes
+
+**Files:** root `package.json` (`engines.node` → `>=20.19`), `apps/server/scripts/spike-ink.ts` (remove dead `lastFrameAt`; 5 s connect timeout; after `turn.end` wait at most 3 s for server close then exit; server `error` message exits 1 promptly), `docs/sdk-notes.md` Moss quirks paragraph (replace stale "re-measure on a warm run" with the measured warm numbers; state model-download cause as unconfirmed; cite that "no cloud fallback" comes from the SDK's own NOT_FOUND error text). (GIT_DIR clearing is in Task 11.)
+
+- [ ] **Step 1:** Implement. **Step 2:** `pnpm --filter @ahead/server spike:ink` still passes; `pnpm -r build && pnpm -r lint && pnpm check:secrets`. **Step 3: Commit** `fix: review follow-ups (engines, ink timeouts, moss notes)`
+
+### Task 14: PLAN.md design updates
+
+**Files:** `PLAN.md` only (plus matching one-line tweaks in `docs/lanes/belief.md`, `docs/lanes/executor.md`, `docs/lanes/voice.md` where they state the old numbers or flow).
+
+Exact changes:
+- Moss: 3-4 queries per Ink update (full text, last ~6 words, one per extracted entity). Claim "~60 queries per utterance at ~2 ms" (replaces "20 to 50 queries per sentence"), cite measured p50 2.0 ms / p95 2.4 ms.
+- Belief cadence driven by Ink `turn.update` (~250 ms measured); LLM belief call runs on every Nth update, never blocking Moss (replaces "every ~400 ms").
+- `turn.eager_end` is the finalize trigger; `turn.resume` un-finalizes; `turn.end` closes the turn.
+- Speculation is two-phase: Phase 1 at belief lock sends a warm Droid session "open the target file, find the record, plan the edit, wait for details". Phase 2 at eager_end sends the final slot values as a second turn in the same session. Pre-create the Droid session at LISTENING. Update the system diagram accordingly.
+- Ink normalizes numbers ("two" → "2"), so contradiction and entity matching normalize text first.
+- Sonic WebSocket streaming for the product, `sonic-3.6` (replaces "Sonic 3.5" wherever it names the model; README requirement line can say "Sonic 3.6 streaming").
+- Droid confinement: workspace at `~/.ahead/workspace`, tools disabled, watchdog abort (one line, link sdk-notes).
+- Do not change scope, action set, demo script, tiers, or timeline otherwise.
+
+- [ ] **Step 1:** Edit. **Step 2:** `pnpm check:secrets`. **Step 3: Commit** `docs: update PLAN.md with spike-driven design changes`
