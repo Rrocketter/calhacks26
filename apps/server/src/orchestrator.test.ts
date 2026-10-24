@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import type { Belief, Claim, ClientEvent, MossHit, ServerEvent, State } from '@ahead/contracts';
+import type { Belief, Claim, ClientEvent, MossHit, RetrievalMode, ServerEvent, State } from '@ahead/contracts';
 import { CONFIRM_WINDOW_MS, CORRECTION_TIMEOUT_MS, Orchestrator, type TrackerPort } from './orchestrator.js';
 import { APPLIED_REPLY, DISCARDED_REPLY, FALLBACK_REPLY } from './reply.js';
 import type { MemoryDoc } from './moss/memory.js';
@@ -24,6 +24,8 @@ type Opts = {
   eagerGate?: Promise<void>;
   /** Record memory writes in `mem`. */
   memory?: boolean;
+  /** The tracker's switchable retriever. */
+  retrieval?: { mode: RetrievalMode; readonly delayMs: number };
 };
 
 const belief = (intent: Belief['intent'], entities: Record<string, string> = {}, claims: Claim[] = []): Belief => ({
@@ -90,6 +92,7 @@ function setup(opts: Opts = {}) {
     correctionTimeoutMs: opts.correctionTimeoutMs ?? 10_000,
     confirmWindowMs: opts.confirmWindowMs ?? 10_000,
     memory: opts.memory ? { add: async (d) => void mem.push(d) } : null,
+    retrieval: opts.retrieval ?? null,
   });
   const names = () => calls.map((c) => c.name);
   const specTypes = () => specEvents.map((e) => `${e.type}:${'turnId' in e ? e.turnId : ''}`);
@@ -848,4 +851,37 @@ test('memory: an unknown request is remembered as no action; nothing is written 
   utter(quiet, 't1', 'What is the weather');
   await settle();
   assert.equal(quiet.mem.length, 0);
+});
+
+// ---- retrieval A/B ----
+
+const metricsOf = (s: S, prefix: string) =>
+  s.ws.flatMap((e) => (e.type === 'metric' && e.label.startsWith(prefix) ? [`${e.label}=${e.ms}`] : []));
+
+test('retrieval_mode switches the retriever and confirms with a retrieval:<mode> metric', () => {
+  const retrieval = { mode: 'moss' as RetrievalMode, delayMs: 300 };
+  const s = setup({ retrieval });
+  s.orch.onClient({ type: 'retrieval_mode', mode: 'cloud-sim' });
+  assert.equal(retrieval.mode, 'cloud-sim');
+  s.orch.onClient({ type: 'retrieval_mode', mode: 'moss' });
+  assert.equal(retrieval.mode, 'moss');
+  assert.deepEqual(metricsOf(s, 'retrieval:'), ['retrieval:cloud-sim=300', 'retrieval:moss=0']);
+  const none = setup();
+  none.orch.onClient({ type: 'retrieval_mode', mode: 'cloud-sim' });
+  assert.ok(none.ws.some((e) => e.type === 'error'));
+});
+
+test('interject lag: time from the first partial with the contradicted word, labelled with the mode', async () => {
+  const retrieval = { mode: 'cloud-sim' as RetrievalMode, delayMs: 300 };
+  const s = setup({ retrieval });
+  begin(s, 't1', 'Draft a message to Priya saying');
+  s.orch.onVoiceEvent(partial('t1', "Draft a message to Priya saying I'll see her Thursday"));
+  const saidAt = Date.now();
+  s.orch.onVoiceEvent(partial('t1', "Draft a message to Priya saying I'll see her Thursday at 2"));
+  s.orch.onTrackerEvent(bu('t1', draft('thursday')));
+  await new Promise((r) => setTimeout(r, 40));
+  s.orch.onTrackerEvent({ type: 'interject', turnId: 't1', text: INTERJECT });
+  const lag = s.ws.find((e) => e.type === 'metric' && e.label === 'interject_lag:cloud-sim');
+  assert.ok(lag && lag.type === 'metric');
+  assert.ok(lag.ms >= 39 && lag.ms <= Date.now() - saidAt + 5, String(lag.ms));
 });

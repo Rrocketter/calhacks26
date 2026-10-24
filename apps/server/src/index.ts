@@ -12,6 +12,7 @@ import { createDroidExecutor } from './executor/droid-executor.js';
 import { Speculator } from './executor/speculator.js';
 import type { Emit } from './executor/types.js';
 import { MossIndex } from './moss/index.js';
+import { SwitchableRetriever } from './moss/cloud-sim.js';
 import { Orchestrator, type DemoPort } from './orchestrator.js';
 import { HaikuAnswerer } from './reply.js';
 import { InkClient } from './voice/ink-client.js';
@@ -99,9 +100,11 @@ async function main(): Promise<void> {
       mockBelief: MOCK_BELIEF,
       onTurnEnd: (turnId, finalText) => orch.onVoiceTurnEnd(turnId, finalText),
     });
+    // Per connection: the HUD's retrieval A/B toggle switches this tracker only.
+    const retriever = new SwitchableRetriever(moss);
     const tracker = MOCK_BELIEF
       ? null
-      : new BeliefTracker({ retriever: moss, llm, contacts, emit: (e) => orch.onTrackerEvent(e) });
+      : new BeliefTracker({ retriever, llm, contacts, emit: (e) => orch.onTrackerEvent(e) });
     // Not start()ed: the executor is already warm.
     const speculator = new Speculator(executor, (e) => orch.onSpeculatorEvent(e));
 
@@ -141,6 +144,7 @@ async function main(): Promise<void> {
       demo,
       mic: LIVE_INK,
       memory: moss.memory,
+      retrieval: retriever,
     });
     let tornDown = false;
     const teardown = (): void => {

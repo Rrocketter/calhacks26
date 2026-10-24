@@ -233,3 +233,16 @@ describe('memory hits in the Moss panel', () => {
     expect(panelHits(['memory-a', 'c1', 'c2', 'c3'].map(hit)).map((h) => h.docId)).toEqual(['memory-a', 'c1', 'c2']);
   });
 });
+
+describe('retrieval A/B', () => {
+  const metric = (label: string, ms: number): ServerEvent => ({ type: 'metric', source: 'moss', label, ms });
+  it('tracks the confirmed mode and the last interject lag per mode, across a demo reset', () => {
+    const s = run([metric('retrieval:cloud-sim', 300), metric('interject_lag:cloud-sim', 2100), metric('interject_lag:moss', 400)]);
+    expect(s.retrieval).toBe('cloud-sim');
+    expect(s.interjectLag).toEqual({ 'cloud-sim': 2100, moss: 400 });
+    const r = hudReducer(s, { type: 'reset' });
+    expect(r.retrieval).toBe('cloud-sim');
+    expect(r.interjectLag).toEqual({ 'cloud-sim': 2100, moss: 400 });
+    expect(run([metric('retrieval:pinecone', 0)]).retrieval).toBe('moss');
+  });
+});

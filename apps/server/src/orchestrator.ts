@@ -1,4 +1,4 @@
-import type { Belief, Claim, ClientEvent, DroidDiffPayload, ServerEvent, State } from '@ahead/contracts';
+import type { Belief, Claim, ClientEvent, DroidDiffPayload, RetrievalMode, ServerEvent, State } from '@ahead/contracts';
 import { SPECULATIVE } from './executor/state-machine.js';
 import {
   APPLIED_REPLY,
@@ -13,6 +13,7 @@ import {
 } from './reply.js';
 import type { Speaker } from './voice/session.js';
 import { isoLocal } from './belief/entities.js';
+import { normalize } from './belief/normalize.js';
 import { artifactMemoryDoc, turnMemoryDoc, type MemoryPort, type Outcome } from './moss/memory.js';
 
 export interface VoicePort {
@@ -49,6 +50,8 @@ export type OrchestratorDeps = {
   confirmWindowMs?: number; // default CONFIRM_WINDOW_MS
   /** Conversation memory (Moss). Null or absent: nothing is remembered. */
   memory?: MemoryPort | null;
+  /** The tracker's retriever, switched by the HUD's retrieval A/B toggle. Null or absent: no toggle. */
+  retrieval?: { mode: RetrievalMode; readonly delayMs: number } | null;
 };
 
 /** How long an unanswered interject holds the turn's Droid Phase 2. */
@@ -118,6 +121,8 @@ export class Orchestrator {
   private readonly memTurns = new Map<string, { text: string; belief: Belief | undefined; outcome: Outcome }>();
   /** Latest diff per file of each speculative turn: a COMMITTED turn's artifact. */
   private readonly diffs = new Map<string, Map<string, string>>();
+  /** The open turn's partials with arrival time, for the interject lag metric. */
+  private partialLog: { turnId: string; items: { text: string; at: number }[] } | null = null;
 
   constructor(deps: OrchestratorDeps) {
     this.d = deps;
@@ -138,6 +143,7 @@ export class Orchestrator {
         return;
       case 'transcript_partial':
         this.lastPartial.set(ev.turnId, ev.text);
+        this.logPartial(ev.turnId, ev.text);
         this.d.send(ev);
         this.speech(ev.turnId, ev.text);
         if (tracker) this.guard(tracker.onUpdate(ev.turnId, ev.text), 'tracker update');
@@ -206,6 +212,7 @@ export class Orchestrator {
   onTrackerEvent = (ev: ServerEvent): void => {
     if (ev.type === 'belief_update' || ev.type === 'moss_hits') return this.fromBelief(ev);
     if (ev.type === 'interject') {
+      this.interjectLag(ev.turnId, ev.text);
       this.d.voice.handleInterject(ev.turnId, ev.text);
       this.startCorrection(ev.turnId, ev.text);
       return;
@@ -247,6 +254,14 @@ export class Orchestrator {
         if (this.deferred?.turnId === ev.turnId) this.resolveCorrection(ev.apply, false);
         else this.d.speculator.onConfirm(ev.turnId, ev.apply);
         this.release();
+        return;
+      }
+      case 'retrieval_mode': {
+        const r = this.d.retrieval;
+        if (!r) return this.error('moss', 'retrieval_mode is not available');
+        r.mode = ev.mode;
+        console.log(`[orchestrator] retrieval ${ev.mode}`);
+        this.d.send({ type: 'metric', source: 'moss', label: `retrieval:${ev.mode}`, ms: ev.mode === 'cloud-sim' ? r.delayMs : 0 });
         return;
       }
       case 'demo_control': {
@@ -491,6 +506,26 @@ export class Orchestrator {
 
   private bumpEnd(turnId: string): void {
     this.endGen.set(turnId, (this.endGen.get(turnId) ?? 0) + 1);
+  }
+
+  // ---- retrieval A/B: interject lag ----
+
+  private logPartial(turnId: string, text: string): void {
+    if (this.partialLog?.turnId !== turnId) this.partialLog = { turnId, items: [] };
+    this.partialLog.items.push({ text, at: Date.now() });
+  }
+
+  /** Time from the first partial with the contradicted word to the interject, sent as `interject_lag:<mode>`. */
+  private interjectLag(turnId: string, text: string): void {
+    const belief = this.lastBelief.get(turnId);
+    const said = belief ? normalize(claimForInterject(belief, text)?.said ?? '') : '';
+    if (!said || this.partialLog?.turnId !== turnId) return;
+    const first = this.partialLog.items.find((p) => ` ${normalize(p.text)} `.includes(` ${said} `));
+    if (!first) return;
+    const ms = Date.now() - first.at;
+    const mode = this.d.retrieval?.mode ?? 'moss';
+    console.log(`[orchestrator] interject lag ${ms}ms after "${said}" (${mode})`);
+    this.d.send({ type: 'metric', source: 'moss', label: `interject_lag:${mode}`, ms });
   }
 
   // ---- conversation memory ----

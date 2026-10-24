@@ -264,6 +264,57 @@ body {
   letter-spacing: -0.02em;
 }
 
+.retrieval {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.retrieval .label {
+  font-size: 13px;
+}
+
+.seg {
+  display: flex;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.seg-btn {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 10px;
+  font: 600 13px var(--sans);
+  color: var(--dim);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.seg-btn + .seg-btn {
+  border-left: 1px solid var(--line);
+}
+
+.seg-btn.on {
+  color: var(--accent-ink);
+  background: var(--accent);
+}
+
+.seg-btn:disabled {
+  cursor: default;
+}
+
+.seg-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.seg-btn .lag {
+  font-size: 15px;
+}
+
 .unit {
   font-size: 15px;
   color: var(--dim);

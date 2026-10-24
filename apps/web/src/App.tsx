@@ -111,6 +111,7 @@ export function App() {
           transport.current?.stop();
         }}
         onDemo={demo}
+        onRetrieval={(m) => transport.current?.send({ type: 'retrieval_mode', mode: m })}
       />
       <Transcript hud={hud} error={hud.error ?? startError} />
       <BeliefPanel hud={hud} />

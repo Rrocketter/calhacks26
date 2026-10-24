@@ -6,7 +6,7 @@ import type { RetrievedHit, Retriever } from '../belief/types.js';
 import { MemoryStore, mergeHits } from './memory.js';
 
 // Hybrid weight; 0.3 puts contact-priya in the top 3 for "draft a message to priya" (0.5 does not). See docs/sdk-notes.md.
-const ALPHA = 0.3;
+export const ALPHA = 0.3;
 
 export class MossIndex implements Retriever {
   private constructor(
