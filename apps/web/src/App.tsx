@@ -6,6 +6,7 @@ import { hudReducer, initialHud } from './hud/state';
 import { TopBar } from './hud/TopBar';
 import { Transcript } from './hud/Transcript';
 import { BeliefPanel } from './hud/BeliefPanel';
+import { ExecutorPanel } from './hud/ExecutorPanel';
 
 const params = new URLSearchParams(location.search);
 const mode: 'live' | 'mock' = params.get('mock') === '1' ? 'mock' : 'live';
@@ -74,6 +75,11 @@ export function App() {
     );
   }
 
+  function confirm(apply: boolean) {
+    if (hud.stateTurnId === null) return;
+    transport.current?.send({ type: 'confirm_action', turnId: hud.stateTurnId, apply });
+  }
+
   return (
     <div className="hud">
       <TopBar
@@ -87,11 +93,7 @@ export function App() {
       />
       <Transcript hud={hud} error={hud.error ?? startError} />
       <BeliefPanel hud={hud} />
-      <section className="panel">
-        <div className="panel-head">
-          <span className="label">Executor</span>
-        </div>
-      </section>
+      <ExecutorPanel hud={hud} onConfirm={confirm} />
     </div>
   );
 }
