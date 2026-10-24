@@ -543,3 +543,29 @@ All times are from the fixture's `turn_start`. `merge done` runs from STAGED to 
 - Ink needs 1.0 to 2.8 s from the start of a one-word "yes" to its first update, so a spoken confirm lands about 1.5 s after the user speaks. The confirm card's Y / Enter is instant.
 - Diagnostics in the server log: `[voice] dropped N mic frames; first frame forwarded +Xms after mute end`, `[voice] first update <turn> +Xms after mute end "<text>"`, `[voice] turn.end with no update <turn>`.
 
+
+### Retrieval A/B: Moss vs cloud-sim (2026-10-24)
+
+- **Switch:** the HUD top bar has a Retrieval toggle (Moss / Cloud-sim +300). It sends client event `retrieval_mode`. The server switches that connection's `SwitchableRetriever` (`apps/server/src/moss/cloud-sim.ts`) and confirms with metric `retrieval:<mode>`. Cloud-sim returns the same Moss results after a 300 ms sleep per query (`CLOUD_SIM_MS`), so only latency differs. It is a comparison, labelled cloud-sim everywhere, never a backend.
+- **Interject lag:** the time from the first partial containing the contradicted word ("Thursday") to the interject. The orchestrator sends it as metric `interject_lag:<mode>`, and the HUD shows the last value per mode under each toggle option (kept across demo resets). The replay prints it as `interject lag`.
+- **Measured** with `replay --local-corpus --retrieval=<mode>` on demo-utterance-1, 3 runs each, real Moss (synthetic corpus in an in-process session index) and real Haiku:
+
+  | Retrieval | Interject lag after "Thursday" | Interject from turn start | Moss step per partial p50 / p95 |
+  | --- | --- | --- | --- |
+  | Moss (in process) | 12 to 17 ms | 3.02 to 3.03 s | 10 to 13 ms / 17 to 27 ms |
+  | Cloud-sim (+300 ms per query) | 3.7 to 4.1 s | 6.8 to 7.2 s | 911 to 925 ms / 1.53 s |
+
+- Why cloud-sim is so much worse than 300 ms: the tracker runs 1 to 4 queries per partial one after another, and partials arrive every 250 ms. At 300 ms a query, each partial's step takes 0.3 to 1.2 s, the steps queue up, and the interject lands after the sentence is over (the fixture ends at about 5 s). With Moss the interject lands on the "Thursday" partial itself, before the next one.
+- **Corpus note:** `ahead-corpus` was rebuilt at 11:29 on 2026-10-24 with 321 imported Google docs (`g-email-*`, `g-contact-*`, `g-evt-*`), and `data/corpus/corpus.json` is gone. `evt-priya-q3` is no longer in the index, so demo-utterance-1 no longer locks or interjects against `ahead-corpus` (`replay` fails, `demo:run` fails "no interject"). `replay --local-corpus` uses the synthetic corpus from `generateCorpus()` in memory, without writing `data/corpus` or touching the cloud. The fixtures need re-recording on the real data.
+
+### Correction wording fix (2026-10-24)
+
+- **Bug:** after an accepted correction (Thursday to Friday), Haiku's free-form entities could still hold the spoken words in another slot (e.g. `message: "I'll see her Thursday at 2..."`). `correctBelief` fixed only `day`/`weekday`/`date_iso`, so Phase 2 got both days.
+- **Fix:**
+  - `correctBelief` makes the corrected value the only value. It replaces the spoken word in every free-text slot (not `weekday`/`date_iso`, which `resolveDay` sets) and records `superseded_<field>`.
+  - Phase 2 drops `superseded_*` from the slots and adds: "Correction: the user originally said thursday, this was corrected to friday. Use friday only and do not mention thursday."
+  - Post-check in the executor: an edit whose added lines name the superseded value (whole word, any case; values with a letter only) is not shown or staged. After the turn, such a draft gets one fix turn (metric `phase2-reject`). If it still names the value, Phase 2 fails rather than stage it.
+- **Measured** with `scripts/correction-trials.ts` (real Droid, Phase 1 and Phase 2 on a fresh seed workspace, utterance 1's belief with the spoken message slot, correction applied by `correctBelief`):
+  - With the fix: **5/5 pass** (Friday, no Thursday). The post-check never had to rerun, so the prompt alone was enough. 18 to 29 s per trial.
+  - Control (`--control`, the old correction): 0/5. Every draft said Thursday and none said Friday.
+- The DEMO_MODE fixture path could not be used for this: with the new corpus, utterance 1 never interjects (see the corpus note above).
