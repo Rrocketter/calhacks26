@@ -29,12 +29,8 @@ const files = execFileSync('git', ['ls-files', '-co', '--exclude-standard'], {
   .split('\n')
   .filter(Boolean);
 
-// Plan docs quote the fake leak-test key verbatim; they are not secrets.
-const skipPrefixes = ['docs/superpowers/plans/'];
-
 let hits = 0;
 for (const file of files) {
-  if (skipPrefixes.some((p) => file.startsWith(p))) continue;
   if (!existsSync(file)) continue; // deleted but still indexed
   let buf;
   try {
