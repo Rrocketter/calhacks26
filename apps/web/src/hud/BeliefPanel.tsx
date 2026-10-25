@@ -46,23 +46,20 @@ export function BeliefPanel({ hud, view }: { hud: HudState; view: View }) {
           {label}
         </div>
       </div>
+      {/* Product: a thin bar named "confidence" with the lock line marked; the number and the
+          LOCK label are Engineering only. Both stay mounted so the flip animates. */}
       <div className={locked ? 'conf locked' : 'conf'}>
+        <span className="conf-word label">confidence</span>
         <div className="conf-track">
           <div className="conf-zone" style={{ left: `${LOCK * 100}%` }} />
           <div className="conf-fill" style={{ width: `${Math.min(100, Math.max(0, conf * 100))}%` }} />
           <div className="conf-tick" style={{ left: `${LOCK * 100}%` }}>
-            <span className="label">{product ? 'Sure enough to act' : `Lock ${LOCK.toFixed(2)}`}</span>
+            <span className="label">Lock {LOCK.toFixed(2)}</span>
             {crossings > 0 && <span className="lock-pulse" key={crossings} />}
           </div>
         </div>
         <span className="conf-value num">
-          {product ? (
-            <>
-              <Tween value={conf * 100} />%
-            </>
-          ) : (
-            <Tween value={conf} digits={2} />
-          )}
+          <Tween value={conf} digits={2} />
         </span>
       </div>
       {product

@@ -17,23 +17,25 @@ export const PLAIN_STATE: Record<State, string> = {
 
 export const stateLabel = (s: State, view: View) => (view === 'product' ? PLAIN_STATE[s] : s.replace(/_/g, ' '));
 
+/** The one terminal step: "Applied" until the turn ends, then whichever outcome was reached last. */
+export const terminalLabel = (reached: State[], view: View) =>
+  stateLabel(reached.filter((s) => s === 'COMMITTED' || s === 'ROLLED_BACK').at(-1) ?? 'COMMITTED', view);
+
 export function Stepper({ hud, view }: { hud: HudState; view: View }) {
   const current = SLOTS.findIndex((slot) => slot.includes(hud.state));
   return (
     <ol className="stepper">
       {SLOTS.map((slot, i) => {
-        // The outcome slot shows whichever outcome happened, else both, dim.
         const hit = slot.filter((s) => hud.reached.includes(s));
-        const shown = hit.length ? hit.slice(-1) : slot;
         const reached = hit.length > 0;
-        const bad = shown[0] === 'ROLLED_BACK' && reached;
-        const good = shown[0] === 'COMMITTED' && reached;
+        const terminal = slot.length > 1;
+        const outcome = reached ? hit.at(-1) : null;
         const cls = [
           'step',
-          reached && 'reached',
+          reached && i < current && 'done',
           i === current && 'current',
-          bad && 'bad',
-          good && 'good',
+          outcome === 'ROLLED_BACK' && 'bad',
+          outcome === 'COMMITTED' && 'good',
           i <= current && 'linked',
         ]
           .filter(Boolean)
@@ -41,10 +43,9 @@ export function Stepper({ hud, view }: { hud: HudState; view: View }) {
         return (
           <li className={cls} key={slot.join('|')}>
             <span className="dot" />
-            <span className="step-label">
-              {shown.map((s) => (
-                <span key={s}>{stateLabel(s, view)}</span>
-              ))}
+            {/* Keyed by text so the terminal label swaps in when the outcome lands */}
+            <span className="step-label" key={terminal ? terminalLabel(hud.reached, view) : view}>
+              {terminal ? terminalLabel(hud.reached, view) : stateLabel(slot[0]!, view)}
             </span>
           </li>
         );

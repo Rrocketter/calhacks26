@@ -832,6 +832,9 @@ mark {
   background: var(--raised);
   border-radius: 7px;
   margin: 30px 0 2px;
+  transition:
+    height 420ms var(--ease),
+    margin 420ms var(--ease);
 }
 
 .conf-zone {
@@ -847,8 +850,8 @@ mark {
   position: relative;
   height: 100%;
   border-radius: 7px;
-  background: linear-gradient(90deg, color-mix(in oklab, var(--accent) 35%, var(--idle)), var(--accent));
-  opacity: 0.75;
+  background: var(--accent);
+  opacity: 0.6;
   transition:
     width 520ms var(--ease),
     opacity 300ms,
@@ -915,8 +918,63 @@ mark {
   font-size: 30px;
   font-weight: 600;
   width: 3.1em;
+  overflow: hidden;
   text-align: right;
-  transition: color 300ms;
+  transition:
+    color 300ms,
+    width 420ms var(--ease),
+    opacity 320ms var(--ease);
+}
+
+.conf-word {
+  max-width: 0;
+  overflow: hidden;
+  opacity: 0;
+  margin-right: -16px;
+  transition:
+    max-width 420ms var(--ease),
+    margin 420ms var(--ease),
+    opacity 320ms var(--ease);
+}
+
+.conf-tick .label {
+  transition: opacity 320ms var(--ease);
+}
+
+/* Product: 4px track, the word on the left, the lock line as a plain tick, no number */
+.hud[data-view='product'] .conf-word {
+  max-width: 8em;
+  opacity: 1;
+  margin-right: 0;
+}
+
+.hud[data-view='product'] .conf-track {
+  height: 4px;
+  margin: 0;
+}
+
+.hud[data-view='product'] .conf-tick {
+  top: -5px;
+  bottom: -5px;
+  background: var(--dim);
+}
+
+.hud[data-view='product'] .conf.locked .conf-tick {
+  background: var(--accent);
+}
+
+.hud[data-view='product'] .conf-tick .label {
+  opacity: 0;
+}
+
+.hud[data-view='product'] .conf-value {
+  width: 0;
+  opacity: 0;
+  margin-left: -16px;
+}
+
+.hud[data-view='product'] .conf-zone {
+  background: none;
 }
 
 .conf.locked .conf-value {
@@ -1172,32 +1230,31 @@ mark {
   flex: none;
 }
 
+/* Done steps filled neutral, the current one in the accent, future ones hollow and dim */
 .step {
   position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 9px;
+  gap: 8px;
   color: var(--faint);
   text-align: center;
-  transition: color 300ms ease 350ms;
+  transition: color 300ms ease 300ms;
 }
 
-/* Connector: a dim rail, with the accent sweeping across it as the next stage is reached */
 .step + .step::before,
 .step + .step::after {
   content: '';
   position: absolute;
-  top: 9px;
-  right: calc(50% + 14px);
-  left: calc(-50% + 14px);
-  height: 2px;
+  top: 5px;
+  right: calc(50% + 12px);
+  left: calc(-50% + 12px);
+  height: 1px;
   background: var(--line);
 }
 
 .step + .step::after {
-  background: var(--accent);
-  box-shadow: 0 0 8px var(--accent);
+  background: var(--dim);
   transform: scaleX(0);
   transform-origin: left;
   transition: transform 450ms var(--ease);
@@ -1209,67 +1266,65 @@ mark {
 
 .step .dot {
   position: relative;
-  width: 20px;
-  height: 20px;
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
-  border: 2px solid var(--line);
+  border: 1.5px solid var(--line);
   background: var(--panel);
   transition:
-    border-color 250ms ease 350ms,
-    background 250ms ease 350ms,
-    box-shadow 250ms ease 350ms;
+    border-color 250ms ease 300ms,
+    background 250ms ease 300ms,
+    box-shadow 250ms ease 300ms;
 }
 
 .step-label {
-  display: flex;
-  flex-direction: column;
   font-size: 13px;
-  font-weight: 700;
-  font-stretch: 112%;
-  letter-spacing: 0.08em;
+  font-weight: 550;
   line-height: 1.25;
+  animation: swap-in 260ms var(--ease);
 }
 
-.step.reached {
+.step.done {
+  color: var(--dim);
+}
+
+.step.done .dot {
+  border-color: var(--dim);
+  background: var(--dim);
+}
+
+.step.current {
   color: var(--accent);
-}
-
-.step.reached .dot {
-  border-color: var(--accent);
 }
 
 .step.current .dot {
   background: var(--accent);
   border-color: var(--accent);
-  animation: ring 1.6s ease-out 600ms infinite;
+  box-shadow: 0 0 0 4px color-mix(in oklab, var(--accent) 22%, transparent);
 }
 
 .step.current .step-label {
-  color: var(--text);
+  font-weight: 650;
 }
 
-.step.good,
-.step.good .step-label {
+.step.good {
   color: var(--good);
 }
 
 .step.good .dot {
   border-color: var(--good);
   background: var(--good);
-  box-shadow: 0 0 14px var(--good);
-  animation: none;
+  box-shadow: 0 0 0 4px color-mix(in oklab, var(--good) 22%, transparent);
 }
 
-.step.bad,
-.step.bad .step-label {
+.step.bad {
   color: var(--bad);
 }
 
 .step.bad .dot {
   border-color: var(--bad);
   background: var(--bad);
-  box-shadow: 0 0 14px var(--bad);
-  animation: none;
+  box-shadow: 0 0 0 4px color-mix(in oklab, var(--bad) 22%, transparent);
 }
 
 /* Droid log: terminal rows streaming in */
@@ -1639,8 +1694,7 @@ mark {
   }
 
   .step-label {
-    font-stretch: 85%;
-    letter-spacing: 0.04em;
+    font-size: 12.5px;
   }
 
   .claim .src {
