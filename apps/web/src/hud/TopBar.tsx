@@ -86,8 +86,11 @@ export function TopBar({ hud, mode, running, starting, onStart, onStop, onDemo, 
   const awaiting = pendingConfirm(hud, mode, running) !== null;
   return (
     <header className="topbar">
-      <span className="wordmark">
-        AHEAD<span className="chevron" aria-hidden />
+      <span className="brand">
+        <span className="wordmark" aria-label="ahem">
+          ah<span className="e">e</span>m
+        </span>
+        <span className="tagline">Speculative execution for conversation</span>
       </span>
       {mode === 'mock' ? (
         <span className="badge on">MOCK</span>

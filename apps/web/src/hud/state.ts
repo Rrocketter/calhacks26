@@ -43,7 +43,7 @@ export type HudState = {
   confirm: ConfirmTarget | null; // the server is listening for a yes / no (confirm_window metric)
   retrieval: RetrievalMode; // confirmed by the server's retrieval:<mode> metric; kept across resets
   interjectLag: Partial<Record<RetrievalMode, number>>; // last interject_lag:<mode> metric per mode; kept across resets
-  replies: Reply[]; // what AHEAD said, as captions; last REPLIES_MAX
+  replies: Reply[]; // what Ahem said, as captions; last REPLIES_MAX
   error: string | null;
 };
 const REPLIES_MAX = 6;

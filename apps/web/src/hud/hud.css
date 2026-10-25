@@ -181,22 +181,43 @@ body {
   }
 }
 
-.wordmark {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 24px;
-  font-weight: 850;
-  font-stretch: 125%;
-  letter-spacing: 0.14em;
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  flex: none;
 }
 
-.chevron {
-  width: 12px;
-  height: 12px;
-  border-top: 4px solid var(--state);
-  border-right: 4px solid var(--state);
-  transform: rotate(45deg);
+/* Lowercase wordmark; the accent is a small tick over the e, tinted with the state */
+.wordmark {
+  font-size: 30px;
+  font-weight: 750;
+  line-height: 1;
+  letter-spacing: -0.035em;
+}
+
+.wordmark .e {
+  position: relative;
+}
+
+.wordmark .e::after {
+  content: '';
+  position: absolute;
+  left: 34%;
+  top: -0.02em;
+  width: 0.3em;
+  height: 0.09em;
+  border-radius: 0.05em;
+  background: var(--state);
+  transform: rotate(-32deg);
+  transform-origin: left center;
+  transition: background 700ms ease;
+}
+
+.tagline {
+  font-size: 13px;
+  color: var(--faint);
+  white-space: nowrap;
 }
 
 .badge {
@@ -1600,6 +1621,9 @@ mark {
   .counter .short {
     display: inline;
   }
+  .tagline {
+    display: none;
+  }
 }
 
 /* Laptop widths: tighter top bar, condensed stepper labels */
@@ -2385,7 +2409,7 @@ kbd {
   opacity: 0;
 }
 
-/* Captions: every line AHEAD spoke, under the turn it answered */
+/* Captions: every line Ahem spoke, under the turn it answered */
 .captions {
   display: flex;
   flex-direction: column;

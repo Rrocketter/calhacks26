@@ -103,7 +103,7 @@ async function consent(client: Auth.OAuth2Client): Promise<void> {
       if (!q.get('code') && !q.get('error')) return res.writeHead(404).end();
       const ok = q.get('state') === state && q.get('code');
       res.writeHead(ok ? 200 : 400, { 'content-type': 'text/plain' });
-      res.end(ok ? 'AHEAD: access granted. You can close this tab.' : 'AHEAD: consent failed. Check the terminal.');
+      res.end(ok ? 'Ahem: access granted. You can close this tab.' : 'Ahem: consent failed. Check the terminal.');
       if (ok) resolve(q.get('code')!);
       else reject(new Error(`consent failed: ${q.get('error') ?? 'state mismatch'}`));
     });

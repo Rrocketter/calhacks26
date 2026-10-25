@@ -1,4 +1,6 @@
-# AHEAD (working name)
+# Ahem
+
+Speculative execution for conversation.
 ### A voice agent that starts working before you finish your sentence, and interrupts you when you're about to be wrong.
 
 Cal Hacks 13.0, Oct 23 to 25 2026. Solo build. Submission deadline Sunday 9:00 AM. Judging 10:30 to 12:30 Sunday, must be at table the whole window.
@@ -7,7 +9,7 @@ Cal Hacks 13.0, Oct 23 to 25 2026. Solo build. Submission deadline Sunday 9:00 A
 
 ## 1. The one-line pitch
 
-Every voice assistant waits for you to stop talking, then thinks. AHEAD retrieves on every Ink transcript update (sub-10 ms via Moss), builds a live belief about what you want while you're still speaking, speculatively stages the action with a Factory Droid, and answers the instant you stop. If what you're saying contradicts what it knows, it cuts in mid-sentence.
+Every voice assistant waits for you to stop talking, then thinks. Ahem retrieves on every Ink transcript update (sub-10 ms via Moss), builds a live belief about what you want while you're still speaking, speculatively stages the action with a Factory Droid, and answers the instant you stop. If what you're saying contradicts what it knows, it cuts in mid-sentence.
 
 ## 2. Why this can win
 
@@ -19,7 +21,7 @@ Every voice assistant waits for you to stop talking, then thinks. AHEAD retrieve
 
 ## 3. Tracks and what each judge must see
 
-| Track | Must-haves | How AHEAD satisfies it |
+| Track | Must-haves | How Ahem satisfies it |
 |---|---|---|
 | Best Solo Hack | Team of 1 on Devpost, live demo, full judging window | Yes by construction |
 | Moss | Moss used meaningfully; voice agent / personal agent that remembers you | Moss is queried on every Ink transcript update. Latency HUD shows per-query ms. Project collapses without it. |

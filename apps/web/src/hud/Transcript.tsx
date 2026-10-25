@@ -45,7 +45,7 @@ function Callout({ text }: { text: string }) {
     <span className="callout" ref={box}>
       <span className="label">
         <span className="cut-icon" aria-hidden />
-        AHEAD cut in
+        Ahem cut in
       </span>
       <span className="callout-text">{text}</span>
     </span>
@@ -84,7 +84,7 @@ function Ghost({ belief }: { belief: Belief }) {
   );
 }
 
-// What AHEAD said for a turn, captioned under it so nothing spoken is lost in a noisy room.
+// What Ahem said for a turn, captioned under it so nothing spoken is lost in a noisy room.
 // An interject still on screen as the callout is not repeated.
 function Captions({ replies, turnId, callout }: { replies: Reply[]; turnId: string; callout: Interject | null }) {
   const shown = replies.filter(
@@ -95,7 +95,7 @@ function Captions({ replies, turnId, callout }: { replies: Reply[]; turnId: stri
     <div className="captions">
       {shown.map((r) => (
         <div className={`caption ${r.kind}`} key={r.seq}>
-          <span className="caption-who">AHEAD</span>
+          <span className="caption-who">Ahem</span>
           {r.text}
         </div>
       ))}

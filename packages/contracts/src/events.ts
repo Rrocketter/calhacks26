@@ -64,7 +64,7 @@ export const ServerEventSchema = z.discriminatedUnion('type', [
     ts: z.number(),
   }),
   z.object({ type: z.literal('interject'), turnId: z.string(), text: z.string() }),
-  // Every line AHEAD speaks, as text, so the HUD can caption it.
+  // Every line Ahem speaks, as text, so the HUD can caption it.
   z.object({
     type: z.literal('assistant_reply'),
     turnId: z.string(),

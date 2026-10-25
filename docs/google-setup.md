@@ -1,6 +1,6 @@
 # Google import setup
 
-`pnpm import:google` copies your real Google Calendar and Gmail into AHEAD, one time, read only. It asks Google for two scopes and nothing else:
+`pnpm import:google` copies your real Google Calendar and Gmail into Ahem, one time, read only. It asks Google for two scopes and nothing else:
 
 - `calendar.readonly`
 - `gmail.readonly`
@@ -42,7 +42,7 @@ The consent screen is the page Google shows you when the script asks for access.
 
 1. Search for `Google Auth Platform` (older consoles call it "OAuth consent screen") and open it.
 2. Click **Get started**.
-3. App name: `AHEAD import`. User support email: pick your own address. Click **Next**.
+3. App name: `Ahem import`. User support email: pick your own address. Click **Next**.
 4. Audience: choose **External**. Click **Next**.
 5. Contact information: type your email. Click **Next**.
 6. Tick the box to agree to the user data policy, then click **Continue** and **Create**.
@@ -111,7 +111,7 @@ Your browser opens Google's consent page (the URL is also printed in the termina
 2. Google warns "Google hasn't verified this app". That is expected for a testing-mode app you made yourself. Click **Continue**.
 3. Google lists what the app wants. Tick both boxes: "View your calendars..." and "Read all your email...". If you leave one unticked, the import fails with a scope error.
 4. Click **Continue**.
-5. The tab says "AHEAD: access granted. You can close this tab." Close it.
+5. The tab says "Ahem: access granted. You can close this tab." Close it.
 
 The terminal then prints something like:
 
@@ -162,7 +162,7 @@ Sent to services while the demo runs:
 
 ## Undo
 
-1. Revoke access at https://myaccount.google.com/connections: find "AHEAD import" and remove it.
+1. Revoke access at https://myaccount.google.com/connections: find "Ahem import" and remove it.
 2. Delete the local copies:
 
    ```bash
@@ -182,7 +182,7 @@ You can also delete the `ahead-import` project in the Cloud console.
 
 ## Troubleshooting
 
-- **"Access blocked: AHEAD import has not completed the Google verification process"**: the account is not a test user. Redo Step 4 with the exact address.
+- **"Access blocked: Ahem import has not completed the Google verification process"**: the account is not a test user. Redo Step 4 with the exact address.
 - **"missing OAuth client file"**: the JSON is not at `~/.ahead/google-client.json`. Redo Step 6.
 - **"is not a Desktop app client"**: you created a Web application client. Create a new one with type Desktop app.
 - **"Request had insufficient authentication scopes"**: a box was left unticked on the consent page. Delete `~/.ahead/google-token.json` and run again.

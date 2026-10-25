@@ -96,7 +96,7 @@ function Answer({ card }: { card: Extract<Card, { kind: 'answer' }> }) {
     <div className="rc chat">
       <div className="bubble you">{card.question}</div>
       <div className="bubble ahead">
-        <span className="bubble-who">AHEAD</span>
+        <span className="bubble-who">Ahem</span>
         {card.answer ?? (
           <span className="typing" aria-label="answering">
             <i />
