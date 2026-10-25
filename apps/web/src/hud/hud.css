@@ -34,6 +34,7 @@
   --accent-ink: #120c00;
   --good: #3ddc84;
   --bad: #ff5a5f;
+  --err: #ff5a5f; /* errors stay red in both views */
   --idle: #5d6f88;
   --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', SFMono-Regular, Menlo, monospace;
   --sans: 'Archivo', 'Helvetica Neue', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
@@ -56,8 +57,6 @@ body,
 
 body {
   background-color: var(--bg);
-  background-image: radial-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px);
-  background-size: 22px 22px;
   color: var(--text);
   font-family: var(--sans);
   font-size: 18px;
@@ -155,28 +154,6 @@ body {
   min-width: 0;
 }
 
-/* Working: a light sweeps along the bottom rule */
-.hud[data-state='SPECULATING'] .topbar::after,
-.hud[data-state='BELIEF_FORMING'] .topbar::after {
-  content: '';
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: -1px;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, var(--state), transparent) 0 0 / 30% 100% no-repeat;
-  animation: sweep 1.4s linear infinite;
-}
-
-@keyframes sweep {
-  from {
-    background-position: -40% 0;
-  }
-  to {
-    background-position: 140% 0;
-  }
-}
-
 .brand {
   display: flex;
   align-items: baseline;
@@ -267,7 +244,7 @@ body {
   border-radius: 8px;
 }
 
-.stat {
+.stats .stat {
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -276,26 +253,26 @@ body {
   padding: 0 14px;
 }
 
-.stat + .stat {
+.stats .stat + .stat {
   border-left: 1px solid var(--line);
 }
 
-.stat .label {
+.stats .stat .label {
   font-size: 12px;
   line-height: 1.1;
 }
 
-.stat .short {
+.stats .stat .short {
   display: none;
 }
 
-.stat .value {
+.stats .stat .value {
   font-size: 19px;
   font-weight: 600;
   line-height: 1;
 }
 
-.stat .unit {
+.stats .stat .unit {
   font-size: 12px;
 }
 
@@ -396,8 +373,8 @@ body {
   display: block;
   height: 100%;
   transform: scaleX(var(--level));
-  background: linear-gradient(90deg, transparent, var(--state) 30%, var(--text) 50%, var(--state) 70%, transparent);
-  opacity: 0.9;
+  background: var(--state);
+  opacity: 0.8;
 }
 
 .controls {
@@ -467,7 +444,7 @@ body {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent 120px), var(--panel);
+  background: var(--panel);
   border: 1px solid color-mix(in oklab, var(--line) 82%, var(--state));
   border-radius: 10px;
   padding: 20px 24px;
@@ -576,9 +553,9 @@ body {
 /* Errors: top of the transcript column, always fully visible */
 .error-banner {
   flex: none;
-  color: var(--bad);
-  background: rgba(255, 90, 95, 0.1);
-  border: 1px solid var(--bad);
+  color: var(--err);
+  background: color-mix(in oklab, var(--err) 10%, transparent);
+  border: 1px solid var(--err);
   border-radius: 6px;
   padding: 10px 14px;
   font-family: var(--mono);
@@ -997,8 +974,8 @@ mark {
   align-items: center;
   font-size: 21px;
   padding: 10px 14px;
-  background: rgba(255, 90, 95, 0.07);
-  border: 1px solid rgba(255, 90, 95, 0.45);
+  background: color-mix(in oklab, var(--bad) 7%, transparent);
+  border: 1px solid color-mix(in oklab, var(--bad) 45%, transparent);
   border-radius: 6px;
   animation:
     swap-in 300ms var(--ease),
@@ -1655,11 +1632,11 @@ mark {
 
 /* Below wide desktops the counters use their short labels so the view switch fits */
 @media (max-width: 1599px) {
-  .stat .long {
+  .stats .stat .long {
     display: none;
   }
 
-  .stat .short {
+  .stats .stat .short {
     display: inline;
   }
   .tagline {
@@ -1803,6 +1780,13 @@ mark {
   .confirm-card {
     animation: none;
   }
+}
+
+/* One accent in Product: what worked reads amber, what was dropped or replaced reads grey.
+   Engineering keeps red / green (the denied-call flash depends on it). */
+.hud[data-view='product'] {
+  --good: var(--accent);
+  --bad: #8b919c;
 }
 
 /* ---- Product / Engineering views ----
@@ -2051,78 +2035,55 @@ kbd {
   filter: grayscale(0.7);
 }
 
-.rc-bar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 9px 14px;
-  font-size: 14px;
-  font-weight: 650;
-  color: var(--dim);
-  background: var(--inset);
-  border-bottom: 1px solid var(--line);
-}
-
-.rc-dots {
-  display: inline-flex;
-  gap: 5px;
-}
-
-.rc-dots i {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: var(--line);
-}
-
 .mail-row {
   display: flex;
-  align-items: baseline;
-  gap: 14px;
-  padding: 10px 16px;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 18px;
   border-bottom: 1px solid var(--line);
-  font-size: 18px;
+  font-size: 16px;
 }
 
 .mail-k {
-  width: 4.2em;
+  width: 4em;
   flex: none;
-  font-size: 14px;
+  font-size: 13px;
   color: var(--faint);
 }
 
 .mail-to {
   padding: 2px 10px;
   border-radius: 999px;
-  background: color-mix(in oklab, var(--accent) 14%, transparent);
-  border: 1px solid color-mix(in oklab, var(--accent) 35%, transparent);
-  font-weight: 600;
+  background: var(--inset);
+  border: 1px solid var(--line);
+  font-weight: 550;
 }
 
 .mail-subject {
-  font-weight: 650;
+  font-weight: 600;
 }
 
-.mail-body {
-  padding: 16px 18px 20px;
-  font-size: 21px;
-  line-height: 1.5;
+.mail-body p {
+  margin: 0;
+  font-size: 18px;
+  line-height: 1.55;
   white-space: pre-wrap;
 }
 
+/* The corrected word: a soft amber tint with an underline, not the transcript's loud mark */
 .mail-body mark,
 .bubble mark {
   color: inherit;
-  padding: 0 3px;
+  padding: 0 2px;
   border-radius: 3px;
-  background: color-mix(in oklab, var(--good) 22%, transparent);
-  box-shadow: inset 0 -2px 0 color-mix(in oklab, var(--good) 70%, transparent);
+  background: color-mix(in oklab, var(--accent) 16%, transparent);
+  box-shadow: inset 0 -2px 0 var(--accent);
+  animation: none;
 }
 
-.rc.event {
-  display: flex;
+.rc-body.event-body {
+  flex-direction: row;
   gap: 18px;
-  padding: 18px;
 }
 
 .cal-tile {
@@ -2130,7 +2091,7 @@ kbd {
   flex-direction: column;
   align-items: center;
   flex: none;
-  width: 88px;
+  width: 76px;
   border-radius: 8px;
   overflow: hidden;
   background: var(--inset);
@@ -2139,10 +2100,10 @@ kbd {
 
 .cal-mon {
   width: 100%;
-  padding: 4px 0;
+  padding: 3px 0;
   text-align: center;
-  font-size: 13px;
-  font-weight: 800;
+  font-size: 12px;
+  font-weight: 750;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--accent-ink);
@@ -2150,15 +2111,15 @@ kbd {
 }
 
 .cal-date {
-  font-size: 40px;
-  font-weight: 700;
+  font-size: 34px;
+  font-weight: 650;
   line-height: 1.15;
 }
 
 .cal-dow {
   padding-bottom: 6px;
-  font-size: 13px;
-  font-weight: 700;
+  font-size: 12px;
+  font-weight: 650;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--dim);
@@ -2167,40 +2128,36 @@ kbd {
 .event-main {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 5px;
   min-width: 0;
 }
 
 .event-title {
-  font-size: 24px;
-  font-weight: 750;
-  line-height: 1.2;
+  font-size: 20px;
+  font-weight: 650;
+  line-height: 1.25;
 }
 
 .event-when {
-  font-size: 19px;
+  font-size: 17px;
 }
 
 .event-when.old {
-  color: var(--bad);
-}
-
-.event-when.old s {
-  text-decoration-thickness: 2px;
+  color: var(--faint);
 }
 
 .event-when.new {
   display: flex;
   align-items: center;
   gap: 10px;
-  font-weight: 650;
-  color: var(--good);
+  font-weight: 600;
+  color: var(--text);
 }
 
 .event-arrow {
   width: 14px;
   height: 2px;
-  background: currentColor;
+  background: var(--accent);
   position: relative;
 }
 
@@ -2211,8 +2168,8 @@ kbd {
   top: -4px;
   width: 8px;
   height: 8px;
-  border-top: 2px solid currentColor;
-  border-right: 2px solid currentColor;
+  border-top: 2px solid var(--accent);
+  border-right: 2px solid var(--accent);
   transform: rotate(45deg);
 }
 
@@ -2222,23 +2179,21 @@ kbd {
 }
 
 .note-title {
-  padding: 14px 18px 0;
-  font-size: 22px;
-  font-weight: 750;
+  font-size: 19px;
+  font-weight: 650;
 }
 
 .note-lines {
   margin: 0;
-  padding: 10px 18px 18px 40px;
-  font-size: 19px;
-  line-height: 1.5;
+  padding-left: 22px;
+  font-size: 17px;
+  line-height: 1.55;
 }
 
-.rc.file {
-  display: flex;
+.rc-body.file-body {
+  flex-direction: row;
   align-items: center;
-  gap: 18px;
-  padding: 18px;
+  gap: 16px;
 }
 
 .file-icon {
@@ -2247,32 +2202,29 @@ kbd {
   align-items: flex-end;
   justify-content: center;
   flex: none;
-  width: 62px;
-  height: 78px;
-  padding-bottom: 10px;
-  border-radius: 6px 18px 6px 6px;
+  width: 52px;
+  height: 66px;
+  padding-bottom: 9px;
+  border-radius: 5px 14px 5px 5px;
   background: var(--inset);
   border: 1px solid var(--line);
   font-family: var(--mono);
-  font-size: 13px;
-  font-weight: 800;
+  font-size: 12px;
+  font-weight: 700;
   color: var(--dim);
 }
 
 .file-icon span {
-  padding: 2px 6px;
+  padding: 2px 5px;
   border-radius: 3px;
   background: var(--line);
 }
 
-.file-icon.pdf span {
-  color: #fff;
-  background: #d9443b;
-}
-
+/* File types keep a neutral badge; the accent marks the one that was found */
+.file-icon.pdf span,
 .file-icon.xlsx span {
-  color: #fff;
-  background: #1f8a4c;
+  color: var(--accent-ink);
+  background: var(--accent);
 }
 
 .file-main {
@@ -2283,60 +2235,55 @@ kbd {
 }
 
 .file-name {
-  font-size: 22px;
-  font-weight: 700;
+  font-size: 19px;
+  font-weight: 650;
   overflow-wrap: anywhere;
 }
 
 .file-path {
-  font-size: 14px;
+  font-size: 13px;
   color: var(--faint);
 }
 
 .file-why {
-  font-size: 17px;
+  font-size: 16px;
   color: var(--dim);
 }
 
-.rc.chat {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 16px;
-  background: transparent;
-  border: 0;
+.rc.chat .rc-body {
+  gap: 10px;
 }
 
 .bubble {
   max-width: 88%;
-  padding: 11px 16px;
-  font-size: 20px;
-  line-height: 1.4;
-  border-radius: 16px;
+  padding: 10px 14px;
+  font-size: 17px;
+  line-height: 1.45;
+  border-radius: 14px;
   animation: swap-in 300ms var(--ease);
 }
 
 .bubble.you {
   align-self: flex-end;
-  color: var(--accent-ink);
-  background: var(--accent);
+  background: var(--inset);
+  border: 1px solid var(--line);
   border-bottom-right-radius: 4px;
 }
 
-.bubble.ahead {
+.bubble.ahem {
   align-self: flex-start;
   display: flex;
   flex-direction: column;
   gap: 2px;
-  background: var(--raised);
-  border: 1px solid var(--line);
+  background: color-mix(in oklab, var(--accent) 9%, var(--raised));
+  border: 1px solid color-mix(in oklab, var(--accent) 35%, var(--line));
   border-bottom-left-radius: 4px;
 }
 
 .bubble-who {
   font-size: 12px;
   font-weight: 650;
-  color: var(--state);
+  color: var(--accent);
 }
 
 .typing {
@@ -2359,6 +2306,12 @@ kbd {
 
 .typing i:nth-child(3) {
   animation-delay: 0.3s;
+}
+
+@keyframes pending {
+  50% {
+    border-color: var(--line);
+  }
 }
 
 @keyframes typing {
@@ -2401,8 +2354,7 @@ kbd {
   font-weight: 600;
   border-radius: 10px;
   border: 1px dashed color-mix(in oklab, var(--state) 50%, var(--line));
-  background: linear-gradient(90deg, transparent, color-mix(in oklab, var(--state) 8%, transparent), transparent) 0 0 / 40% 100% no-repeat;
-  animation: sweep 1.6s linear infinite;
+  animation: pending 1.6s ease-in-out infinite;
 }
 
 .rc-pending-label {
@@ -2566,6 +2518,7 @@ kbd {
   font-size: 13px;
   font-weight: 550;
   color: var(--dim);
+  background: var(--inset);
   border-bottom: 1px solid var(--line);
 }
 

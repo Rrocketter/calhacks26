@@ -1,22 +1,27 @@
+import type { ReactNode } from 'react';
 import type { Card, When } from './cards';
 import { highlightSegments } from './cards';
+import { CalendarIcon, ChatIcon, FileIcon, MailIcon, NoteIcon } from './icons';
 
 // stamp: how the turn ended, laid over the card (Applied / Discarded / Couldn't finish).
 type Stamp = { text: string; tone: 'good' | 'bad' } | null;
 
 const range = (w: When) => (w.end ? `${w.time} – ${w.end}` : w.time);
 
+// Every card: a tiny header row (icon + what Ahem did), then the content in the body font.
+function Head({ icon, children }: { icon: ReactNode; children: ReactNode }) {
+  return (
+    <div className="rc-head">
+      {icon}
+      {children}
+    </div>
+  );
+}
+
 function Message({ card }: { card: Extract<Card, { kind: 'message' }> }) {
   return (
     <div className="rc mail">
-      <div className="rc-bar">
-        <span className="rc-dots" aria-hidden>
-          <i />
-          <i />
-          <i />
-        </span>
-        New message · draft
-      </div>
+      <Head icon={<MailIcon />}>Draft message</Head>
       <div className="mail-row">
         <span className="mail-k">To</span>
         <span className="mail-to">{card.to ?? 'Unknown'}</span>
@@ -27,8 +32,8 @@ function Message({ card }: { card: Extract<Card, { kind: 'message' }> }) {
           <span className="mail-subject">{card.subject}</span>
         </div>
       )}
-      <div className="mail-body">
-        {highlightSegments(card.body, card.highlight).map((s, i) => (s.mark ? <mark key={i}>{s.text}</mark> : s.text))}
+      <div className="rc-body mail-body">
+        <p>{highlightSegments(card.body, card.highlight).map((s, i) => (s.mark ? <mark key={i}>{s.text}</mark> : s.text))}</p>
       </div>
     </div>
   );
@@ -40,23 +45,26 @@ function Event({ card }: { card: Extract<Card, { kind: 'event' }> }) {
   const [mon, date] = (md ?? '').split(' ');
   return (
     <div className="rc event">
-      <div className="cal-tile" aria-hidden>
-        <span className="cal-mon">{mon}</span>
-        <span className="cal-date num">{date}</span>
-        <span className="cal-dow">{dow}</span>
-      </div>
-      <div className="event-main">
-        <div className="event-title">{card.title ?? 'Event'}</div>
-        <div className="event-when old">
-          <s>
-            {card.before.day} · {range(card.before)}
-          </s>
+      <Head icon={<CalendarIcon />}>Reschedule event</Head>
+      <div className="rc-body event-body">
+        <div className="cal-tile" aria-hidden>
+          <span className="cal-mon">{mon}</span>
+          <span className="cal-date num">{date}</span>
+          <span className="cal-dow">{dow}</span>
         </div>
-        <div className="event-when new">
-          <span className="event-arrow" aria-hidden />
-          {card.after.day} · {range(card.after)}
+        <div className="event-main">
+          <div className="event-title">{card.title ?? 'Event'}</div>
+          <div className="event-when old">
+            <s>
+              {card.before.day} · {range(card.before)}
+            </s>
+          </div>
+          <div className="event-when new">
+            <span className="event-arrow" aria-hidden />
+            {card.after.day} · {range(card.after)}
+          </div>
+          {card.location && <div className="event-loc">{card.location}</div>}
         </div>
-        {card.location && <div className="event-loc">{card.location}</div>}
       </div>
     </div>
   );
@@ -65,13 +73,15 @@ function Event({ card }: { card: Extract<Card, { kind: 'event' }> }) {
 function Note({ card }: { card: Extract<Card, { kind: 'note' }> }) {
   return (
     <div className="rc note">
-      <div className="rc-bar">New note</div>
-      {card.title && <div className="note-title">{card.title}</div>}
-      <ul className="note-lines">
-        {card.lines.map((l, i) => (
-          <li key={i}>{l}</li>
-        ))}
-      </ul>
+      <Head icon={<NoteIcon />}>New note</Head>
+      <div className="rc-body">
+        {card.title && <div className="note-title">{card.title}</div>}
+        <ul className="note-lines">
+          {card.lines.map((l, i) => (
+            <li key={i}>{l}</li>
+          ))}
+        </ul>
+      </div>
     </div>
   );
 }
@@ -79,13 +89,16 @@ function Note({ card }: { card: Extract<Card, { kind: 'note' }> }) {
 function FileCard({ card }: { card: Extract<Card, { kind: 'file' }> }) {
   return (
     <div className="rc file">
-      <div className={`file-icon ${(card.type ?? '').toLowerCase()}`} aria-hidden>
-        <span>{card.type ?? '?'}</span>
-      </div>
-      <div className="file-main">
-        <div className="file-name">{card.name}</div>
-        {card.path ? <div className="file-path num">{card.path}</div> : <div className="file-path">Searching your files</div>}
-        {card.why && <div className="file-why">{card.why}</div>}
+      <Head icon={<FileIcon />}>{card.path ? 'Found file' : 'Finding file'}</Head>
+      <div className="rc-body file-body">
+        <div className={`file-icon ${(card.type ?? '').toLowerCase()}`} aria-hidden>
+          <span>{card.type ?? '?'}</span>
+        </div>
+        <div className="file-main">
+          <div className="file-name">{card.name}</div>
+          {card.path ? <div className="file-path num">{card.path}</div> : <div className="file-path">Searching your files</div>}
+          {card.why && <div className="file-why">{card.why}</div>}
+        </div>
       </div>
     </div>
   );
@@ -94,16 +107,19 @@ function FileCard({ card }: { card: Extract<Card, { kind: 'file' }> }) {
 function Answer({ card }: { card: Extract<Card, { kind: 'answer' }> }) {
   return (
     <div className="rc chat">
-      <div className="bubble you">{card.question}</div>
-      <div className="bubble ahead">
-        <span className="bubble-who">Ahem</span>
-        {card.answer ?? (
-          <span className="typing" aria-label="answering">
-            <i />
-            <i />
-            <i />
-          </span>
-        )}
+      <Head icon={<ChatIcon />}>Answer</Head>
+      <div className="rc-body">
+        <div className="bubble you">{card.question}</div>
+        <div className="bubble ahem">
+          <span className="bubble-who">Ahem</span>
+          {card.answer ?? (
+            <span className="typing" aria-label="answering">
+              <i />
+              <i />
+              <i />
+            </span>
+          )}
+        </div>
       </div>
     </div>
   );
