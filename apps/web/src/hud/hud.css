@@ -71,22 +71,18 @@ body {
 }
 
 .label {
-  font-size: 13px;
-  font-weight: 650;
-  font-stretch: 118%;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  color: var(--dim);
+  font-size: 12.5px;
+  font-weight: 550;
+  letter-spacing: 0;
+  color: var(--faint);
   white-space: nowrap;
 }
 
 .label .idx {
   font-family: var(--mono);
-  font-stretch: 100%;
   font-weight: 500;
-  letter-spacing: 0;
   color: var(--state);
-  margin-right: 10px;
+  margin-right: 8px;
 }
 
 /* Layout + ambient state */
@@ -221,11 +217,9 @@ body {
 }
 
 .badge {
-  font-family: var(--mono);
-  font-size: 13px;
-  font-weight: 700;
-  letter-spacing: 0.12em;
-  padding: 4px 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 3px 8px;
   border: 1px solid var(--line);
   border-radius: 4px;
   color: var(--dim);
@@ -240,12 +234,12 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 9px;
-  min-width: 13.5em;
-  padding: 6px 12px;
+  min-width: 12em;
+  height: 36px;
+  padding: 0 14px;
   border-radius: 999px;
   font-size: 14px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
+  font-weight: 600;
   color: var(--state);
   background: color-mix(in oklab, var(--state) 12%, transparent);
   border: 1px solid color-mix(in oklab, var(--state) 40%, transparent);
@@ -264,30 +258,45 @@ body {
   box-shadow: 0 0 10px var(--state);
 }
 
-.counters {
+/* The three counters as one cluster, split by hairlines */
+.stats {
   display: flex;
-  gap: clamp(18px, 2.2vw, 36px);
+  flex: none;
+  height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
 }
 
-.counter {
+.stat {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  justify-content: center;
+  gap: 2px;
+  min-width: 76px;
+  padding: 0 14px;
 }
 
-.counter .label {
-  font-size: 13px;
+.stat + .stat {
+  border-left: 1px solid var(--line);
 }
 
-.counter .short {
+.stat .label {
+  font-size: 12px;
+  line-height: 1.1;
+}
+
+.stat .short {
   display: none;
 }
 
-.counter .value {
-  font-size: 30px;
+.stat .value {
+  font-size: 19px;
   font-weight: 600;
   line-height: 1;
-  letter-spacing: -0.02em;
+}
+
+.stat .unit {
+  font-size: 12px;
 }
 
 .retrieval {
@@ -297,7 +306,7 @@ body {
 }
 
 .retrieval .label {
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .seg {
@@ -311,8 +320,10 @@ body {
   display: inline-flex;
   align-items: baseline;
   gap: 8px;
-  padding: 5px 10px;
-  font: 600 13px var(--sans);
+  height: 34px;
+  align-items: center;
+  padding: 0 12px;
+  font: 550 13.5px var(--sans);
   color: var(--dim);
   background: transparent;
   border: 0;
@@ -338,7 +349,7 @@ body {
 }
 
 .seg-btn .lag {
-  font-size: 15px;
+  font-size: 13px;
 }
 
 .unit {
@@ -354,9 +365,8 @@ body {
 
 .state-pill.yesno {
   font-family: var(--sans);
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 650;
-  letter-spacing: 0.02em;
   color: var(--accent-ink);
   background: var(--accent);
   border-color: var(--accent);
@@ -396,15 +406,17 @@ body {
 }
 
 .btn {
-  font: 650 15px var(--sans);
-  font-stretch: 115%;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 36px;
+  font: 600 14.5px var(--sans);
   color: var(--text);
   background: var(--raised);
   border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 10px 18px;
+  border-radius: 8px;
+  padding: 0 18px;
   cursor: pointer;
   transition:
     border-color 150ms,
@@ -475,11 +487,9 @@ body {
 }
 
 .tag {
-  font-family: var(--mono);
-  font-size: 13px;
-  font-weight: 700;
-  letter-spacing: 0.1em;
-  padding: 3px 7px;
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 2px 8px;
   border-radius: 4px;
   border: 1px solid var(--accent);
   color: var(--accent);
@@ -689,12 +699,10 @@ mark {
   margin-right: 0.55em;
   padding: 1px 6px;
   vertical-align: 0.35em;
-  font-family: var(--mono);
-  font-size: 13px;
+  font-family: var(--sans);
+  font-size: 12px;
   font-style: normal;
-  font-weight: 500;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  font-weight: 550;
   color: var(--dim);
   border: 1px dashed color-mix(in oklab, var(--dim) 70%, transparent);
   border-radius: 3px;
@@ -936,12 +944,9 @@ mark {
 }
 
 .chip .k {
-  font-size: 12px;
-  font-weight: 650;
-  font-stretch: 118%;
-  color: var(--dim);
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--faint);
 }
 
 .claim {
@@ -968,11 +973,8 @@ mark {
 }
 
 .claim .k {
-  font-size: 12px;
-  font-weight: 650;
-  font-stretch: 118%;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
+  font-size: 12.5px;
+  font-weight: 600;
   color: var(--bad);
 }
 
@@ -1129,9 +1131,9 @@ mark {
   margin-right: 8px;
   padding: 1px 6px;
   border-radius: 4px;
+  font-family: var(--sans);
   font-size: 12px;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  font-weight: 600;
   color: var(--accent-ink);
   background: var(--accent);
 }
@@ -1614,11 +1616,11 @@ mark {
 
 /* Below wide desktops the counters use their short labels so the view switch fits */
 @media (max-width: 1599px) {
-  .counter .long {
+  .stat .long {
     display: none;
   }
 
-  .counter .short {
+  .stat .short {
     display: inline;
   }
   .tagline {
@@ -1781,15 +1783,7 @@ kbd {
 
 .view-switch {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.view-switch .label {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
+  flex: none;
 }
 
 /* Engineering-only chrome fades out in Product but keeps its box, so nothing shifts. */
@@ -2302,9 +2296,8 @@ kbd {
 }
 
 .bubble-who {
-  font-size: 11px;
-  font-weight: 750;
-  letter-spacing: 0.14em;
+  font-size: 12px;
+  font-weight: 650;
   color: var(--state);
 }
 
@@ -2345,11 +2338,9 @@ kbd {
 .rc-stamp {
   align-self: flex-end;
   padding: 4px 10px;
-  font-size: 13px;
-  font-weight: 800;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  border: 2px solid currentColor;
+  font-size: 12.5px;
+  font-weight: 650;
+  border: 1px solid currentColor;
   border-radius: 5px;
   background: var(--panel);
   animation: pop-in 360ms var(--pop);
@@ -2377,10 +2368,8 @@ kbd {
 }
 
 .rc-pending-label {
-  font-size: 13px;
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+  font-size: 12.5px;
+  font-weight: 600;
   color: var(--state);
 }
 
@@ -2436,9 +2425,8 @@ kbd {
 
 .caption-who {
   flex: none;
-  font-size: 11px;
-  font-weight: 750;
-  letter-spacing: 0.14em;
+  font-size: 12px;
+  font-weight: 650;
   color: var(--state);
 }
 

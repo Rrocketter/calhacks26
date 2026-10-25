@@ -21,7 +21,7 @@ type CounterProps = { label: string; short: string; value: number | null; digits
 // `short` replaces the label on narrow screens so the bar never overflows.
 function Counter({ label, short, value, digits = 0, unit }: CounterProps) {
   return (
-    <div className="counter">
+    <div className="stat">
       <span className="label" title={label}>
         <span className="long">{label}</span>
         <span className="short">{short}</span>
@@ -65,10 +65,7 @@ function RetrievalToggle({ hud, enabled, onPick }: { hud: HudState; enabled: boo
 function ViewSwitch({ view, onView }: { view: View; onView(v: View): void }) {
   return (
     <div className="view-switch" role="group" aria-label="View">
-      <span className="label">
-        View <kbd>D</kbd>
-      </span>
-      <div className="seg">
+      <div className="seg" title="Switch view (D)" aria-keyshortcuts="D">
         {(['product', 'engineering'] as const).map((v) => (
           <button key={v} className={view === v ? 'seg-btn on' : 'seg-btn'} aria-pressed={view === v} onClick={() => onView(v)}>
             {v === 'product' ? 'Product' : 'Engineering'}
@@ -93,9 +90,9 @@ export function TopBar({ hud, mode, running, starting, onStart, onStop, onDemo, 
         <span className="tagline">Speculative execution for conversation</span>
       </span>
       {mode === 'mock' ? (
-        <span className="badge on">MOCK</span>
+        <span className="badge on">Mock</span>
       ) : (
-        <span className={running ? 'badge on' : 'badge'}>LIVE</span>
+        <span className={running ? 'badge on' : 'badge'}>Live</span>
       )}
       {awaiting ? (
         <span className="state-pill yesno" role="status" key="yesno">
@@ -103,12 +100,12 @@ export function TopBar({ hud, mode, running, starting, onStart, onStop, onDemo, 
           Listening for yes / no
         </span>
       ) : (
-        <span className="state-pill num" key={`${hud.state}:${view}`}>
+        <span className={view === 'engineering' ? 'state-pill num' : 'state-pill'} key={`${hud.state}:${view}`}>
           <span className="state-dot" />
           {stateLabel(hud.state, view)}
         </span>
       )}
-      <div className="counters">
+      <div className="stats">
         <Counter label="Moss queries · turn" short="Queries" value={count} />
         <Counter label="Avg retrieval" short="Avg" value={avg} digits={1} unit="ms" />
         <Counter label="Time to first audio" short="TTFA" value={ttfa === undefined ? null : Math.round(ttfa)} unit="ms" />

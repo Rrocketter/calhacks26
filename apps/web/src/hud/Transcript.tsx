@@ -131,8 +131,8 @@ export function Transcript({ hud, error }: { hud: HudState; error: string | null
         <span className="label">
           <span className="idx">01</span>Transcript
         </span>
-        {eagerEnd && open && <span className="tag">EAGER END</span>}
-        {open && !eagerEnd && partial !== '' && <span className="tag live">HEARING</span>}
+        {eagerEnd && open && <span className="tag">Eager end</span>}
+        {open && !eagerEnd && partial !== '' && <span className="tag live">Hearing</span>}
       </div>
       {older.length > 0 && (
         <div className="finals">

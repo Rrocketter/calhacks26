@@ -61,7 +61,7 @@ export function ExecutorPanel({ hud, view, canSend, onConfirm }: Props) {
           <span className="idx">03</span>
           {product ? 'Result' : 'Executor'}
         </span>
-        {dimmed && <span className="tag dim">PREVIOUS TURN</span>}
+        {dimmed && <span className="tag dim">Previous turn</span>}
         {/* Same name the server's executor/git.ts gives the branch */}
         {hud.droidTurnId && <span className={['ms num branch eng-only', (ended || prior) && 'gone'].filter(Boolean).join(' ')}>spec/{hud.droidTurnId.replace(/[^A-Za-z0-9._-]/g, '-')}</span>}
       </div>
