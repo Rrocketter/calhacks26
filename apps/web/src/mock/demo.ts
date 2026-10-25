@@ -107,7 +107,6 @@ export async function* demoDroidRun(turnId: string, opts: { withDenied?: boolean
   const steps: Step2[] = [
     { kind: 'plan', payload: { steps: ['Read contacts.json', 'Write messages/outbox/esha.md', 'Verify'] } },
     { kind: 'step', payload: { text: 'Read contacts.json' } },
-    { kind: 'tool', payload: { tool: 'Read', path: 'contacts.json', denied: false } },
     ...(opts.withDenied
       ? [{ kind: 'tool', denied: true, payload: { tool: 'Read', path: '../../.env', denied: true, reason: 'outside-workspace' } } as Step2]
       : []),

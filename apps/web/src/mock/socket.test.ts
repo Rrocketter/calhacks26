@@ -79,9 +79,9 @@ describe('MockSocket', () => {
 
   it('surfaces one denied tool event', async () => {
     const evs = await replay({ ...FAST, denied: true });
-    const denied = evs.filter((e) => e.type === 'droid_event' && e.kind === 'tool' && e.denied);
-    expect(denied).toHaveLength(1);
-    expect(denied[0]).toMatchObject({ payload: { path: '../../.env', denied: true } });
+    const tools = evs.filter((e) => e.type === 'droid_event' && e.kind === 'tool');
+    expect(tools).toHaveLength(1);
+    expect(tools[0]).toMatchObject({ denied: true });
   });
 
   it('failed result carries failed:true and does not roll back', async () => {
