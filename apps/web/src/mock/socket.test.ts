@@ -39,7 +39,7 @@ describe('MockSocket', () => {
     const inter = idx(evs, (e) => e.type === 'interject');
     const partials = evs.slice(0, inter).filter((e) => e.type === 'transcript_partial');
     const lastPartial = partials[partials.length - 1];
-    expect(lastPartial?.type === 'transcript_partial' && lastPartial.text).toContain('Thursday');
+    expect(lastPartial?.type === 'transcript_partial' && lastPartial.text).toContain("Tuesday's");
 
     const eager = idx(evs, (e) => e.type === 'turn_eager_end');
     expect(eager).toBeGreaterThan(-1);
@@ -48,12 +48,12 @@ describe('MockSocket', () => {
     expect(evs).toContainEqual({ type: 'metric', source: 'sonic', label: 'ttfa', ms: 180 });
   });
 
-  it('drives the hud to COMMITTED with Thursday highlighted', async () => {
+  it("drives the hud to COMMITTED with Tuesday's highlighted", async () => {
     const hud = (await replay()).reduce(hudReducer, initialHud());
     expect(hud.state).toBe('COMMITTED');
     expect(hud.moss.count).toBeGreaterThan(0);
     const last = hud.finals.at(-1);
-    expect(last && last.highlight !== null && words(last.text)[last.highlight]).toMatch(/^Thursday/);
+    expect(last && last.highlight !== null && words(last.text)[last.highlight]).toMatch(/^Tuesday's/);
   });
 
   it('captions the interject, the staged prompt and the ack, like the server', async () => {
@@ -73,15 +73,15 @@ describe('MockSocket', () => {
     expect(inter).toBeGreaterThan(-1);
     const partials = evs.slice(0, inter).filter((e) => e.type === 'transcript_partial');
     const last = partials[partials.length - 1];
-    expect(last?.type === 'transcript_partial' && last.text).toContain('Thursday');
+    expect(last?.type === 'transcript_partial' && last.text).toContain("Tuesday's");
     expect(evs.filter((e) => e.type === 'interject')).toHaveLength(1);
   });
 
   it('surfaces one denied tool event', async () => {
     const evs = await replay({ ...FAST, denied: true });
-    const tools = evs.filter((e) => e.type === 'droid_event' && e.kind === 'tool');
-    expect(tools).toHaveLength(1);
-    expect(tools[0]).toMatchObject({ denied: true });
+    const denied = evs.filter((e) => e.type === 'droid_event' && e.kind === 'tool' && e.denied);
+    expect(denied).toHaveLength(1);
+    expect(denied[0]).toMatchObject({ payload: { path: '../../.env', denied: true } });
   });
 
   it('failed result carries failed:true and does not roll back', async () => {

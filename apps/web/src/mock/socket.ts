@@ -1,12 +1,12 @@
 import { parseServerEvent, type ClientEvent, type ServerEvent } from '@ahead/contracts';
-import { mockBeliefStream, mockDroidRun, mockInkStream, type InkFixture } from '@ahead/contracts/mocks';
-import fixture from '@ahead/contracts/mocks/fixtures/demo-utterance-1.json';
+import { mockInkStream } from '@ahead/contracts/mocks';
+import { DEMO_FIXTURE as fixture, demoBeliefStream, demoDroidRun } from './demo';
 import type { Transport } from '../transport';
 
 export type ReplayOpts = { speed?: number; denied?: boolean; failed?: boolean; autoConfirmMs?: number | null; beliefOffsetMs?: number };
 
-// Belief timeline starts this long after turn_start so the Thursday interject lands between
-// the "Thursday" partial (3000 ms) and "at" (3250 ms).
+// Belief timeline starts this long after turn_start so the Tuesday interject lands between
+// the "Tuesday's" partial (4000 ms) and "group" (4250 ms).
 export const BELIEF_OFFSET_MS = 600;
 
 const norm = (t: string) => t.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
@@ -72,7 +72,7 @@ export class MockSocket implements Transport {
 
   private async replay(run: Run): Promise<void> {
     const live = () => run.id === this.runId;
-    const turnId = (fixture as InkFixture).turnId;
+    const turnId = fixture.turnId;
     let eagerDone!: () => void;
     const eager = new Promise<void>((r) => (eagerDone = r));
     let turnEnded = false;
@@ -98,7 +98,7 @@ export class MockSocket implements Transport {
     };
 
     const droid = async () => {
-      for await (const e of mockDroidRun(turnId, { withDenied: this.opts.denied })) {
+      for await (const e of demoDroidRun(turnId, { withDenied: this.opts.denied })) {
         if (!live() || this.discarded) return;
         let out = e;
         if (e.type === 'droid_event' && (e.kind === 'diff' || e.kind === 'result')) {
@@ -123,7 +123,7 @@ export class MockSocket implements Transport {
       await this.sleep(this.opts.beliefOffsetMs ?? BELIEF_OFFSET_MS);
       let formed = false;
       let speculating = false;
-      for await (const e of mockBeliefStream(turnId, { speed: this.speed })) {
+      for await (const e of demoBeliefStream(turnId, { speed: this.speed })) {
         if (!live()) return;
         if (e.type === 'belief_update') said = e.belief.claims[0]?.said;
         if (e.type === 'interject' && said && !finalSeen && !` ${seen} `.includes(` ${norm(said)} `)) {
@@ -145,7 +145,7 @@ export class MockSocket implements Transport {
       }
     };
 
-    for await (const e of mockInkStream(fixture as InkFixture, { speed: this.speed })) {
+    for await (const e of mockInkStream(fixture, { speed: this.speed })) {
       if (!live()) return;
       this.emit(run, e);
       if (e.type === 'transcript_partial') {
