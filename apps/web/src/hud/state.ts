@@ -83,8 +83,8 @@ export function words(text: string): string[] {
   return text.split(/\s+/).filter(Boolean);
 }
 
-// A trailing possessive is dropped: the claim says "Tuesday", Ink writes "Tuesday's".
-const norm = (w: string) => w.toLowerCase().replace(/['’]s\b/g, '').replace(/[^a-z0-9]/g, '');
+// A trailing possessive is dropped: the claim says "Tuesday", Ink writes "Tuesday's" (or "Tuesday's,").
+const norm = (w: string) => w.toLowerCase().replace(/[^a-z0-9'’]/g, '').replace(/['’]s$/, '').replace(/['’]/g, '');
 
 export function findWord(text: string, said: string): number | null {
   const target = norm(said);

@@ -51,7 +51,7 @@ export function ExecutorPanel({ hud, view, canSend, onConfirm }: Props) {
       : hud.state === 'COMMITTED'
         ? { text: 'Applied', tone: 'good' as const }
         : stale
-          ? { text: 'Staged, not finished', tone: 'bad' as const }
+          ? { text: 'Staged, not finished', tone: 'err' as const }
           : rolledBack
             ? { text: 'Discarded', tone: 'bad' as const }
             : null;

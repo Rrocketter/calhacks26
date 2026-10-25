@@ -84,7 +84,7 @@ export function TopBar({ hud, mode, running, starting, onStart, onStop, onDemo, 
   return (
     <header className="topbar">
       <span className="brand">
-        <span className="wordmark" aria-label="ahem">
+        <span className="wordmark" role="img" aria-label="ahem">
           ah<span className="e">e</span>m
         </span>
         <span className="tagline">Speculative execution for conversation</span>

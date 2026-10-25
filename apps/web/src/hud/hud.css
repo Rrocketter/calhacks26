@@ -486,7 +486,7 @@ body {
   height: 7px;
   margin-right: 7px;
   border-radius: 50%;
-  background: var(--bad);
+  background: var(--err);
   vertical-align: 1px;
   animation: blink 1s steps(1) infinite;
 }
@@ -575,7 +575,7 @@ body {
   gap: 10px;
   font-size: 20px;
   color: var(--dim);
-  /* With captions under each turn this can outgrow the panel: the oldest lines give way at the top. */
+  /* With the caption strip and a callout this can outgrow the panel: the oldest lines give way at the top. */
   flex: 0 1 auto;
   min-height: 0;
   overflow: hidden;
@@ -1776,6 +1776,11 @@ mark {
   opacity: 0.75;
 }
 
+/* The confirm card answers the same question as the inline Apply / Discard row it covers */
+.hud:has(.confirm-card) .executor .confirm {
+  visibility: hidden;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .confirm-card {
     animation: none;
@@ -1783,7 +1788,7 @@ mark {
 }
 
 /* One accent in Product: what worked reads amber, what was dropped or replaced reads grey.
-   Engineering keeps red / green (the denied-call flash depends on it). */
+   Errors and failed runs use --err, which stays red. Engineering keeps red / green. */
 .hud[data-view='product'] {
   --good: var(--accent);
   --bad: #8b919c;
@@ -2030,7 +2035,8 @@ kbd {
     filter 400ms;
 }
 
-.rc-wrap.ended.bad .rc {
+.rc-wrap.ended.bad .rc,
+.rc-wrap.ended.err .rc {
   opacity: 0.55;
   filter: grayscale(0.7);
 }
@@ -2343,6 +2349,11 @@ kbd {
 
 .rc-stamp.bad {
   color: var(--bad);
+}
+
+/* A failed run stays red even in Product, where a plain Discard reads grey */
+.rc-stamp.err {
+  color: var(--err);
 }
 
 .rc-pending {

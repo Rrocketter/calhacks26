@@ -44,6 +44,9 @@ describe('findWord', () => {
   it("matches a possessive (the claim says Tuesday, Ink writes Tuesday's)", () => {
     expect(findWord("the VQE results at Tuesday's group meeting", 'Tuesday')).toBe(4);
     expect(findWord('at Tuesdays group', 'Tuesday')).toBeNull();
+    expect(findWord("at Tuesday's, then", 'Tuesday')).toBe(1);
+    expect(findWord("it's here", 'it')).toBe(0);
+    expect(findWord('Esha sits', 'Esha')).toBe(0);
   });
 });
 

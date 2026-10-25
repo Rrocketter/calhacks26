@@ -3,8 +3,8 @@ import type { Card, When } from './cards';
 import { highlightSegments } from './cards';
 import { CalendarIcon, ChatIcon, FileIcon, MailIcon, NoteIcon } from './icons';
 
-// stamp: how the turn ended, laid over the card (Applied / Discarded / Couldn't finish).
-type Stamp = { text: string; tone: 'good' | 'bad' } | null;
+// stamp: how the turn ended (Applied / Discarded, or err when the run failed: red in both views).
+type Stamp = { text: string; tone: 'good' | 'bad' | 'err' } | null;
 
 const range = (w: When) => (w.end ? `${w.time} – ${w.end}` : w.time);
 
