@@ -76,3 +76,48 @@ export function LevelMeter() {
     </span>
   );
 }
+
+// Idle waveform: a rolling history of the mic level as soft rounded bars, written straight
+// to the DOM per frame. With no mic (mock, or not started) it breathes at a low level.
+export function Waveform({ bars = 48 }: { bars?: number }) {
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const els = [...(box.current?.children ?? [])] as HTMLElement[];
+    const hist = new Array<number>(els.length).fill(0.12);
+    const still = reduced();
+    let raf = 0;
+    let last = 0;
+    let shown = 0;
+    const tick = (now: number) => {
+      raf = requestAnimationFrame(tick);
+      if (now - last < 70) return;
+      last = now;
+      const mic = micLevel.get();
+      const t = now / 1000;
+      if (mic <= 0.002) {
+        // No mic signal: a slow travelling swell across the bars instead of a flat line.
+        els.forEach((el, i) => {
+          const h = still ? 0.16 : 0.2 + 0.16 * Math.sin(t * 2.1 - i * 0.32) * Math.sin(t * 0.7 + i * 0.09);
+          hist[i] = h;
+          el.style.setProperty('--h', h.toFixed(3));
+        });
+        return;
+      }
+      const target = Math.min(1, Math.sqrt(mic) * 2.4);
+      shown = target > shown ? target : shown * 0.7 + target * 0.3;
+      hist.shift();
+      // A little per-bar jitter so a steady level still reads as sound, not a block.
+      hist.push(Math.max(0.06, shown * (still ? 1 : 0.6 + 0.8 * Math.random())));
+      els.forEach((el, i) => el.style.setProperty('--h', hist[i]!.toFixed(3)));
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, []);
+  return (
+    <div className="wave" ref={box} aria-hidden>
+      {Array.from({ length: bars }, (_, i) => (
+        <span key={i} />
+      ))}
+    </div>
+  );
+}

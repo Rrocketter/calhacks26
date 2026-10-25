@@ -2,6 +2,7 @@ import { Fragment, useEffect, useLayoutEffect, useRef, useState, type CSSPropert
 import type { Belief } from '@ahead/contracts';
 import { words, type HudState, type Interject, type Reply } from './state';
 import { ghostOpacity, ghostParts } from './ghost';
+import { Waveform } from './motion';
 
 // Keyed by index and text, so new words and Ink's rewrites ("two" → "2") animate in, the rest stay put.
 function Words({ text, highlight, callout }: { text: string; highlight: number | null; callout?: ReactNode }) {
@@ -84,21 +85,51 @@ function Ghost({ belief }: { belief: Belief }) {
   );
 }
 
-// What Ahem said for a turn, captioned under it so nothing spoken is lost in a noisy room.
-// An interject still on screen as the callout is not repeated.
-function Captions({ replies, turnId, callout }: { replies: Reply[]; turnId: string; callout: Interject | null }) {
-  const shown = replies.filter(
-    (r) => r.turnId === turnId && !(r.kind === 'interject' && callout?.turnId === turnId && callout.text === r.text),
-  );
+const STRIP_MAX = 3;
+
+/** Spoken lines for the caption strip, newest first. An interject still on screen as the callout is not repeated. */
+export function stripReplies(replies: Reply[], callout: Interject | null): Reply[] {
+  return replies
+    .filter((r) => !(r.kind === 'interject' && callout?.turnId === r.turnId && callout.text === r.text))
+    .reverse()
+    .slice(0, STRIP_MAX);
+}
+
+// Everything Ahem said, in one strip along the bottom of the column, so nothing spoken is lost in a noisy room.
+function CaptionStrip({ replies, callout }: { replies: Reply[]; callout: Interject | null }) {
+  const shown = stripReplies(replies, callout);
   if (shown.length === 0) return null;
   return (
-    <div className="captions">
+    <div className="caption-strip" aria-label="What Ahem said">
       {shown.map((r) => (
         <div className={`caption ${r.kind}`} key={r.seq}>
           <span className="caption-who">Ahem</span>
-          {r.text}
+          <span className="caption-text">{r.text}</span>
         </div>
       ))}
+    </div>
+  );
+}
+
+const HINTS = [
+  "Draft a message to Esha saying I'll present the VQE results at Tuesday's group meeting",
+  'Move my SETI research meeting to Wednesday afternoon',
+  'When is my Math 52 homework due?',
+];
+
+// Before anyone speaks: the mic as a soft waveform, and what to try saying.
+function Idle() {
+  return (
+    <div className="idle-hero">
+      <Waveform />
+      <span className="idle-line">Say something. Ahem starts working before you finish.</span>
+      <ul className="hints">
+        {HINTS.map((h) => (
+          <li key={h}>
+            <span className="hint-try">Try</span>"{h}"
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
@@ -139,7 +170,6 @@ export function Transcript({ hud, error }: { hud: HudState; error: string | null
           {older.map((f, i) => (
             <div key={`${f.turnId}-${i}`}>
               <Words text={f.text} highlight={f.highlight} />
-              <Captions replies={hud.replies} turnId={f.turnId} callout={null} />
             </div>
           ))}
         </div>
@@ -155,15 +185,10 @@ export function Transcript({ hud, error }: { hud: HudState; error: string | null
           <Words text={current.text} highlight={current.highlight} callout={callout} />
         </div>
       ) : (
-        finals.length === 0 && (
-          <div className="partial idle">
-            <span className="idle-dot" />
-            Waiting for speech
-          </div>
-        )
+        finals.length === 0 && <Idle />
       )}
       {!open && !current && callout}
-      {turnId !== null && (open || current) && <Captions replies={hud.replies} turnId={turnId} callout={interject} />}
+      <CaptionStrip replies={hud.replies} callout={interject} />
     </section>
   );
 }

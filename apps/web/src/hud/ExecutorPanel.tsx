@@ -4,6 +4,7 @@ import { ResultCard } from './ResultCard';
 import { buildCard, intentLabel } from './cards';
 import { DiffView } from './DiffView';
 import { feedRows, type FeedRow } from './feed';
+import { SparkIcon } from './icons';
 
 // canSend: a transport is up (live socket open, or mock).
 type Props = { hud: HudState; view: View; canSend: boolean; onConfirm(apply: boolean): void };
@@ -71,7 +72,17 @@ export function ExecutorPanel({ hud, view, canSend, onConfirm }: Props) {
           {card ? (
             <ResultCard card={card} stamp={stamp} />
           ) : idle ? (
-            <span className="empty">Nothing to do yet. Ask for something.</span>
+            <div className="rc placeholder">
+              <div className="rc-head">
+                <SparkIcon />
+                Waiting for a request
+              </div>
+              <div className="rc-body">
+                <span className="skel" />
+                <span className="skel short" />
+                <span className="placeholder-note">A draft appears here before you finish talking.</span>
+              </div>
+            </div>
           ) : diffs.length > 0 ? (
             <DiffView diffs={diffs} mark={mark} />
           ) : running ? (
