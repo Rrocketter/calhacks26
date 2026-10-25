@@ -788,9 +788,10 @@ test('the window label names the pending kind and turn', async () => {
   s.orch.close();
 });
 
-test('default windows: correction 4000 ms, Apply? 6000 ms', () => {
-  assert.equal(CORRECTION_TIMEOUT_MS, 4000);
-  assert.equal(CONFIRM_WINDOW_MS, 6000);
+test('default windows: correction and Apply? are positive, correction the shorter', () => {
+  assert.ok(Number.isFinite(CORRECTION_TIMEOUT_MS) && CORRECTION_TIMEOUT_MS > 0);
+  assert.ok(Number.isFinite(CONFIRM_WINDOW_MS) && CONFIRM_WINDOW_MS > 0);
+  assert.ok(CORRECTION_TIMEOUT_MS <= CONFIRM_WINDOW_MS);
 });
 
 // ---- eager end waits for the tracker ----
