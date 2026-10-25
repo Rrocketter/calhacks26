@@ -78,7 +78,7 @@ export function App() {
   function demo() {
     if (mode === 'live') {
       dispatch({ type: 'reset' });
-      transport.current?.send({ type: 'demo_control', action: 'start' }); // the server's default fixture
+      transport.current?.send({ type: 'demo_control', action: 'start', fixture: new URLSearchParams(window.location.search).get('fixture') ?? undefined }); // ?fixture= overrides the server default
       return;
     }
     if (!mock.current) {

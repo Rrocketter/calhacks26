@@ -57,9 +57,9 @@ export type OrchestratorDeps = {
 };
 
 /** How long an unanswered interject holds the turn's Droid Phase 2. */
-export const CORRECTION_TIMEOUT_MS = 4000;
+export const CORRECTION_TIMEOUT_MS = Number(process.env.AHEM_CORRECTION_MS ?? 8000);
 /** How long "Apply?" listens for a spoken yes/no. */
-export const CONFIRM_WINDOW_MS = 6000;
+export const CONFIRM_WINDOW_MS = Number(process.env.AHEM_CONFIRM_MS ?? 20000);
 /**
  * metric label the HUD reads as "Listening for yes / no". Opening sends
  * `confirm_window:<correction|apply>:<turnId>` with ms > 0 (the HUD's confirm_action target);

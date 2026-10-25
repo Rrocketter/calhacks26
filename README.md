@@ -30,6 +30,8 @@ Once those exist, the interjection falls out for free. A live belief checked aga
 
 ![Ahem HUD during the interjection](docs/img/hud-interject.png)
 
+![The staged draft, ready to apply](docs/img/hud-staged.png)
+
 Say "Draft a message to Esha saying I'll present the VQE results at Tuesday's group meeting." At "Tuesday" Ahem says, out loud, "Heads up, the VQE meeting is Monday at 8:30, not Tuesday. Say Monday?" You say yes. The corrected draft is already staged because the agent started on it at the word "Esha."
 
 Say "Move my SETI research meeting to Wednesday afternoon." The belief locks at "SETI," the agent opens that one calendar file and plans the edit while you finish the sentence, and when you stop it asks "Apply?" with the diff on screen. Say no and the branch is gone.
@@ -115,6 +117,8 @@ Haiku turns a partial sentence plus the top Moss hits into intent, entities, and
 | Belief lock to staged diff | 8 to 14 s (phase one overlaps your speech) |
 
 ## Setup
+
+![Idle HUD](docs/img/hud-idle.png)
 
 ```bash
 pnpm install
