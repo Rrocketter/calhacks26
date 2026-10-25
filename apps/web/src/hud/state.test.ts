@@ -41,6 +41,10 @@ describe('findWord', () => {
     expect(findWord(`${TEXT},`, 'thursday')).toBe(9);
     expect(findWord('Draft a', 'Thursday')).toBeNull();
   });
+  it("matches a possessive (the claim says Tuesday, Ink writes Tuesday's)", () => {
+    expect(findWord("the VQE results at Tuesday's group meeting", 'Tuesday')).toBe(4);
+    expect(findWord('at Tuesdays group', 'Tuesday')).toBeNull();
+  });
 });
 
 describe('hudReducer', () => {
